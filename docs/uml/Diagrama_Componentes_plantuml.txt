@@ -1,0 +1,121 @@
+@startuml
+left to right direction
+skinparam backgroundColor #FFFFFF
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+skinparam component {
+  BorderColor #2E75B6
+  ArrowColor #1F3864
+  FontSize 12
+}
+
+skinparam package {
+  BorderColor #666666
+  FontStyle bold
+}
+
+' Estilos por tipo
+skinparam component<<frontend>> {
+  BackgroundColor #E8F1FB
+}
+
+skinparam component<<backend>> {
+  BackgroundColor #EAF7EA
+}
+
+skinparam component<<ml>> {
+  BackgroundColor #FFF2CC
+}
+
+skinparam component<<storage>> {
+  BackgroundColor #FCE4EC
+}
+
+skinparam component<<pipeline>> {
+  BackgroundColor #EFE7F8
+}
+
+package "Cliente (Navegador)" {
+
+  component "UI\nCarga de Imágenes" as UI_upload <<frontend>>
+  component "UI\nVisualizador Segmentación" as UI_viewer <<frontend>>
+  component "UI\nEditor Máscaras HITL" as UI_editor <<frontend>>
+  component "UI\nPanel Administración" as UI_admin <<frontend>>
+
+}
+
+package "Backend API (FastAPI)" {
+
+  component "Router\nAPI REST" as Router <<backend>>
+
+  component "Controlador\nInferencia" as Ctrl_inf <<backend>>
+  component "Controlador\nValidación" as Ctrl_val <<backend>>
+  component "Controlador\nReentrenamiento" as Ctrl_retrain <<backend>>
+  component "Servicio\nAutenticación" as Auth <<backend>>
+
+}
+
+package "Servicio de Inferencia\n(Docker)" {
+
+  component "API Interna\n/predict" as API_inf <<ml>>
+  component "Preprocesador\nImágenes" as Preproc <<ml>>
+  component "Modelo\nU-Net" as UNet <<ml>>
+
+}
+
+package "Almacenamiento" {
+
+  database "PostgreSQL\nmetadatos / validaciones" as DB
+  component "File Storage\nimágenes / máscaras" as FileStore <<storage>>
+
+}
+
+package "Pipeline Mejora Continua" {
+
+  component "Gestor\nDatasets" as DataMgr <<pipeline>>
+  component "Motor\nReentrenamiento" as Trainer <<pipeline>>
+  component "Comparador\nModelos\nIoU / Dice" as Comparator <<pipeline>>
+  component "Registro Modelos\nMLflow" as ModelReg <<pipeline>>
+
+}
+
+' ==== Flujo Frontend -> Backend ====
+
+UI_upload --> Router
+UI_viewer --> Router
+UI_editor --> Router
+UI_admin --> Router
+
+Router --> Auth
+
+Router --> Ctrl_inf
+Router --> Ctrl_val
+Router --> Ctrl_retrain
+
+' ==== Inferencia ====
+
+Ctrl_inf --> API_inf
+API_inf --> Preproc
+Preproc --> UNet
+UNet --> API_inf
+
+' ==== Persistencia ====
+
+Ctrl_inf --> DB
+Ctrl_inf --> FileStore
+Ctrl_val --> DB
+
+' ==== Pipeline ML ====
+
+Ctrl_retrain --> DataMgr
+
+DataMgr --> DB
+DataMgr --> FileStore
+DataMgr --> Trainer
+
+Trainer --> Comparator
+Comparator --> ModelReg
+
+ModelReg --> UNet : deploy modelo
+@enduml

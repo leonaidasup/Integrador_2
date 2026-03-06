@@ -1,0 +1,90 @@
+@startuml
+top to bottom direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+
+skinparam node {
+  BorderColor #2E75B6
+  FontStyle bold
+}
+
+skinparam artifact {
+  BorderColor #375623
+}
+
+skinparam database {
+  BorderColor #7F6000
+}
+
+' Estilos por tipo
+skinparam nodeclient {
+  BackgroundColor #E8F1FB
+}
+
+skinparam nodebackend {
+  BackgroundColor #EAF7EA
+}
+
+skinparam nodeml {
+  BackgroundColor #FFF2CC
+}
+
+skinparam nodedata {
+  BackgroundColor #FCE4EC
+}
+
+skinparam nodetrain {
+  BackgroundColor #EFE7F8
+}
+
+' ==== CLIENTE ====
+
+node ClientenNavegador Web as Client client {
+    artifact Aplicación Reactn(HTML  JS  CSS) as ReactApp
+}
+
+' ==== SERVIDOR API ====
+
+node Servidor de AplicaciónnCloud  VPS as AppServer backend {
+    artifact NginxnReverse Proxy as Nginx
+    artifact Backend FastAPIn(Python) as FastAPI
+}
+
+' ==== SERVICIO DE INFERENCIA ====
+
+node Servidor InferencianDocker Container as InfServer ml {
+    artifact Servicio InferencianPyTorch + FastAPI as UNetService
+    artifact Modelo U-Netn(.pt  .pth) as ModelFile
+}
+
+' ==== ALMACENAMIENTO ====
+
+node Servidor de Datos as DBServer data {
+    database PostgreSQLnmetadatos  validaciones as PG
+    artifact File Storagen(S3  Local) as Storage
+}
+
+' ==== ENTRENAMIENTO ====
+
+node Servidor EntrenamientonGPU  Colab as TrainServer train {
+    artifact PipelinenReentrenamiento as TrainPipeline
+    artifact Registro ModelosnMLflow as MLflowReg
+}
+
+' ==== CONEXIONES ====
+
+Client -- Nginx  HTTPS
+Nginx -- FastAPI  proxy_pass
+
+FastAPI -- UNetService  POST predict
+UNetService -- ModelFile  carga modelo
+
+FastAPI -- PG  SQL
+FastAPI -- Storage  lecturaescritura
+
+TrainPipeline -- PG  consulta datos
+TrainPipeline -- Storage  descarga dataset
+TrainPipeline -- MLflowReg  registra modelo
+
+MLflowReg -- UNetService  actualizar modelon(si mejora IoU)
+@enduml

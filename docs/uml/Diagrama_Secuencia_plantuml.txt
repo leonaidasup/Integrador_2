@@ -1,0 +1,89 @@
+@startuml
+skinparam backgroundColor #FAFAFA
+skinparam shadowing false
+skinparam roundcorner 10
+
+skinparam sequence {
+  ArrowColor #2C3E50
+  LifeLineBorderColor #34495E
+  LifeLineBackgroundColor #ECF0F1
+  ParticipantBorderColor #2C3E50
+}
+
+actor "Investigador" as User
+
+participant "Frontend\n(React)" as FE
+participant "Backend API\n(FastAPI)" as BE
+participant "Servicio de Inferencia\nU-Net (Docker)" as INF
+database "Base de Datos\nPostgreSQL" as DB
+
+== Fase 1: Carga de imagen ==
+
+User -> FE : Subir imagen
+activate FE
+
+FE -> FE : Validar tipo\nPNG/TIF/JPG
+
+FE -> BE : POST /api/predict
+activate BE
+
+== Fase 2: Inferencia del modelo ==
+
+BE -> INF : POST /predict
+activate INF
+
+INF -> INF : Preprocesamiento\n+ ejecución U-Net
+
+INF --> BE : máscara + confianza\n+ versión_modelo
+deactivate INF
+
+== Fase 3: Registro de resultados ==
+
+BE -> DB : Guardar imagen\nmáscara + metadatos
+activate DB
+DB --> BE : id_registro
+deactivate DB
+
+BE --> FE : resultado + id_registro
+deactivate BE
+
+== Fase 4: Visualización ==
+
+FE -> FE : Renderizar superposición\nimagen + máscara
+
+FE --> User : Mostrar segmentación
+deactivate FE
+
+
+== Fase 5: Validación Human-in-the-Loop ==
+
+alt Segmentación correcta
+
+User -> FE : Click "Aprobar"
+
+FE -> BE : PATCH /validacion/{id}
+activate BE
+
+BE -> DB : Guardar validación\nestado = aprobada
+DB --> BE : OK
+
+BE --> FE : Confirmación
+deactivate BE
+
+else Segmentación incorrecta
+
+User -> FE : Editar máscara
+
+FE -> BE : PATCH /validacion/{id}
+activate BE
+
+BE -> DB : Guardar máscara corregida
+DB --> BE : OK
+
+BE --> FE : Confirmación
+deactivate BE
+
+end
+
+FE --> User : Validación registrada ✓
+@enduml

@@ -1,0 +1,85 @@
+@startuml GrafenoUseCases
+left to right direction
+
+' ===== Estilo general =====
+skinparam backgroundColor #FAFAFA
+skinparam shadowing false
+skinparam roundcorner 15
+
+skinparam actor {
+  BackgroundColor #E8F0FE
+  BorderColor #1A73E8
+}
+
+skinparam usecase {
+  BackgroundColor #FFFFFF
+  BorderColor #444444
+  ArrowColor #333333
+}
+
+' ===== Actores =====
+actor "Investigador / Técnico" as User
+actor "Administrador" as Admin
+actor "Pipeline de\nEntrenamiento" as Pipeline
+
+' ===== Sistema =====
+rectangle "Plataforma de Segmentación de Grafeno" {
+
+  package "Inferencia del Modelo" #E3F2FD {
+
+    usecase "UC-01\nCargar imagen\nde microscopía" as UC01
+    usecase "UC-02\nEjecutar segmentación\n(U-Net)" as UC02
+    usecase "UC-03\nVisualizar máscara\nsuperpuesta" as UC03
+    usecase "UC-04\nDescargar máscara" as UC04
+
+  }
+
+  package "Validación Human-in-the-Loop" #E8F5E9 {
+
+    usecase "UC-05\nAprobar segmentación" as UC05
+    usecase "UC-06\nCorregir máscara\nmanualmente" as UC06
+    usecase "UC-07\nRegistrar validación\ncon metadatos" as UC07
+
+  }
+
+  package "Administración del Sistema" #FFF3E0 {
+
+    usecase "UC-08\nRevisar historial\nde validaciones" as UC08
+    usecase "UC-09\nGestionar versiones\nde datasets" as UC09
+
+  }
+
+  package "Mejora Continua del Modelo" #F3E5F5 {
+
+    usecase "UC-10\nEjecutar pipeline\nde reentrenamiento" as UC10
+    usecase "UC-11\nComparar modelos\n(IoU / Dice Score)" as UC11
+    usecase "UC-12\nDesplegar modelo\nactualizado" as UC12
+
+  }
+
+}
+
+' ===== Relaciones usuario =====
+User --> UC01
+User --> UC02
+UC02 .> UC03 : <<include>>
+User --> UC04
+
+User --> UC05
+User --> UC06
+
+UC05 .> UC07 : <<include>>
+UC06 .> UC07 : <<include>>
+
+' ===== Relaciones administración =====
+Admin --> UC08
+Admin --> UC09
+Admin --> UC12
+
+' ===== Pipeline =====
+Pipeline --> UC10
+
+UC10 .> UC11 : <<include>>
+UC11 .> UC12 : <<extend>>
+
+@enduml
