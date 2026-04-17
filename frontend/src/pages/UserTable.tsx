@@ -97,6 +97,7 @@ export default function UserTable() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [editOpen, setEditOpen] = useState(false);
+  const [viewOpen, setViewOpen] = useState(false); // ✅ NUEVO
   const [selectedUser, setSelectedUser] = useState<any>(null);
 
   const filteredUsers = users.filter((row) => {
@@ -168,12 +169,22 @@ export default function UserTable() {
         <div className="flex flex-row gap-1">
           <Button
             variant="transparent"
+            ico={<SvgIcon name="eye" size="w-4 h-4" />}
+            onClick={() => {
+              setSelectedUser(row);
+              setViewOpen(true);
+            }}
+          />
+
+          <Button
+            variant="transparent"
             ico={<SvgIcon name="pencil" size="w-4 h-4" />}
             onClick={() => {
               setSelectedUser(row);
               setEditOpen(true);
             }}
           />
+
           <Button
             variant="transparent"
             ico={<SvgIcon name="trash-2" size="w-4 h-4" />}
@@ -186,7 +197,6 @@ export default function UserTable() {
 
   return (
     <main className="flex-1 overflow-y-auto p-6 bg-[var(--bg-page-user)]">
-      {/* header */}
       <div className="flex flex-col mb-6">
         <h1 className="text-2xl text-[var(--cl-font-primary)] font-semibold">
           User Table
@@ -196,7 +206,6 @@ export default function UserTable() {
         </p>
       </div>
 
-      {/* summary cards */}
       <div className="grid grid-cols-3 gap-4 mb-4">
         <Card hoverable>
           <SummaryCard
@@ -224,7 +233,6 @@ export default function UserTable() {
         </Card>
       </div>
 
-      {/* table */}
       <Card title="Users">
         <div className="flex flex-row items-center gap-2 mb-4">
           <InputText
@@ -248,7 +256,6 @@ export default function UserTable() {
         <Table columns={columns} data={filteredUsers} />
       </Card>
 
-      {/* edit modal */}
       <Modal
         open={editOpen}
         onClose={() => setEditOpen(false)}
@@ -257,49 +264,27 @@ export default function UserTable() {
         icon="user-pen"
       >
         <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1">
-            <label
-              className="text-xs font-semibold"
-              style={{ color: "var(--cl-font-secondary)" }}
-            >
-              Full Name
-            </label>
-            <InputText
-              placeholder="Full name"
-              value={selectedUser?.user ?? ""}
-              onChange={() => {}}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label
-              className="text-xs font-semibold"
-              style={{ color: "var(--cl-font-secondary)" }}
-            >
-              Username
-            </label>
-            <InputText
-              placeholder="Username"
-              value={selectedUser?.username ?? ""}
-              onChange={() => {}}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label
-              className="text-xs font-semibold"
-              style={{ color: "var(--cl-font-secondary)" }}
-            >
-              Role
-            </label>
-            <SelectList
-              options={[
-                { label: "User", value: "user" },
-                { label: "Admin", value: "admin" },
-              ]}
-              value={selectedUser?.role ?? "user"}
-              onChange={() => {}}
-              className="w-full"
-            />
-          </div>
+          <InputText
+            value={selectedUser?.user ?? ""}
+            onChange={(e) =>
+              setSelectedUser({ ...selectedUser, user: e.target.value })
+            }
+          />
+          <InputText
+            value={selectedUser?.username ?? ""}
+            onChange={(e) =>
+              setSelectedUser({ ...selectedUser, username: e.target.value })
+            }
+          />
+          <SelectList
+            options={[
+              { label: "User", value: "user" },
+              { label: "Admin", value: "admin" },
+            ]}
+            value={selectedUser?.role ?? "user"}
+            onChange={(val) => setSelectedUser({ ...selectedUser, role: val })}
+          />
+
           <div className="flex flex-row justify-end gap-2 mt-2">
             <Button
               label="Cancel"
@@ -307,6 +292,125 @@ export default function UserTable() {
               onClick={() => setEditOpen(false)}
             />
             <Button label="Save User" ico={<SvgIcon name="save" />} />
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={viewOpen}
+        onClose={() => setViewOpen(false)}
+        title="User Info"
+        description="User usage & activity"
+        icon="activity"
+      >
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold text-[var(--cl-font-primary)]">
+              {selectedUser?.user}
+            </span>
+            <span className="text-xs text-[var(--cl-font-secondary)]">
+              @{selectedUser?.username}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="p-3 rounded-lg bg-[var(--bg-tables-selector)]">
+              <p className="text-xs text-[var(--cl-font-secondary)]">
+                CPU Usage
+              </p>
+              <p className="text-sm text-[var(--cl-font-primary)]">32%</p>
+            </div>
+
+            <div className="p-3 rounded-lg bg-[var(--bg-tables-selector)]">
+              <p className="text-xs text-[var(--cl-font-secondary)]">
+                GPU Usage
+              </p>
+              <p className="text-sm text-[var(--cl-font-primary)]">68%</p>
+            </div>
+
+            <div className="p-3 rounded-lg bg-[var(--bg-tables-selector)]">
+              <p className="text-xs text-[var(--cl-font-secondary)]">
+                Model Storage
+              </p>
+              <p className="text-sm text-[var(--cl-font-primary)]">2.4 GB</p>
+            </div>
+
+            <div className="p-3 rounded-lg bg-[var(--bg-tables-selector)]">
+              <p className="text-xs text-[var(--cl-font-secondary)]">
+                Dataset Storage
+              </p>
+              <p className="text-sm text-[var(--cl-font-primary)]">5.1 GB</p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-[var(--cl-font-secondary)]">
+              Models Usage
+            </p>
+
+            <div className="flex flex-col gap-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-[var(--cl-font-primary)]">ResNet50</span>
+                <span className="text-[var(--cl-font-secondary)]">1.2 GB</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[var(--cl-font-primary)]">YOLOv8</span>
+                <span className="text-[var(--cl-font-secondary)]">800 MB</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-[var(--cl-font-secondary)]">Datasets</p>
+
+            <div className="flex flex-col gap-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-[var(--cl-font-primary)]">Images v1</span>
+                <span className="text-[var(--cl-font-secondary)]">3.2 GB</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[var(--cl-font-primary)]">
+                  Medical Set
+                </span>
+                <span className="text-[var(--cl-font-secondary)]">1.9 GB</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-[var(--cl-font-secondary)]">
+              Recent Activity
+            </p>
+
+            <div className="flex flex-col text-xs rounded-lg overflow-hidden border border-[var(--cl-border)]">
+              <div className="grid grid-cols-3 px-3 py-2 bg-[var(--bg-tables)] text-[var(--cl-font-secondary)]">
+                <span>Action</span>
+                <span>Date</span>
+                <span>Status</span>
+              </div>
+
+              <div className="grid grid-cols-3 px-3 py-2">
+                <span className="text-[var(--cl-font-primary)]">Run Model</span>
+                <span className="text-[var(--cl-font-secondary)]">Mar 14</span>
+                <span className="text-[var(--cl-green)]">Success</span>
+              </div>
+
+              <div className="grid grid-cols-3 px-3 py-2">
+                <span className="text-[var(--cl-font-primary)]">
+                  Upload Dataset
+                </span>
+                <span className="text-[var(--cl-font-secondary)]">Mar 13</span>
+                <span className="text-[var(--cl-green)]">Success</span>
+              </div>
+
+              <div className="grid grid-cols-3 px-3 py-2">
+                <span className="text-[var(--cl-font-primary)]">
+                  Train Model
+                </span>
+                <span className="text-[var(--cl-font-secondary)]">Mar 12</span>
+                <span className="text-[var(--cl-yellow)]">Pending</span>
+              </div>
+            </div>
           </div>
         </div>
       </Modal>

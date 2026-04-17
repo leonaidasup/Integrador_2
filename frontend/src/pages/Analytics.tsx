@@ -4,6 +4,7 @@ import { InputText } from "../components/InputText";
 import { SvgIcon } from "../components/SvgIcon";
 import { Table } from "../components/Table";
 import { Button } from "../components/Button";
+import { Modal } from "../components/Modal";
 import {
   LineChart,
   Line,
@@ -13,13 +14,12 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  ReferenceLine,
   PieChart,
   Pie,
   Cell,
   Tooltip as PieTooltip,
 } from "recharts";
-
-// --- mock data ---
 
 const experiments = [
   { id: 1, name: "Exp 1 - ResNet MNIST", date: "2026-03-12" },
@@ -28,7 +28,6 @@ const experiments = [
   { id: 4, name: "Exp 4 - ResNet CIFAR", date: "2026-03-06" },
 ];
 
-// macro: resumen por entrenamiento (filas de la tabla)
 const trainingsByExp: Record<number, any[]> = {
   1: [
     {
@@ -112,7 +111,6 @@ const trainingsByExp: Record<number, any[]> = {
   ],
 };
 
-// micro: detalle época por época por training id
 const epochsByTraining: Record<string, any[]> = {
   "1a": [
     { epoch: 1, dice: 0.72, f1: 0.7, iou: 0.61, precision: 0.73, recall: 0.68 },
@@ -233,9 +231,17 @@ const labelDistByTraining: Record<string, { name: string; value: number }[]> = {
   ],
 };
 
-const PIE_COLORS = ["#0f92f7", "#a855f7"]; // azul + púrpura;
+const PIE_COLORS = ["#0f92f7", "#a855f7"];
 
-// --- sub components ---
+const METRIC_COLORS: Record<string, string> = {
+  dice: "#00c896",
+  f1: "#0f92f7",
+  iou: "#ce9200",
+  precision: "#a855f7",
+  recall: "#f43f5e",
+};
+
+const METRICS = ["dice", "f1", "iou", "precision", "recall"];
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
   done: { bg: "var(--bg-green)", color: "var(--cl-green)" },
@@ -243,6 +249,106 @@ const statusStyles: Record<string, { bg: string; color: string }> = {
 };
 
 const textRender = (value: any) => <span className="font-medium">{value}</span>;
+
+function calcStats(data: any[], key: string) {
+  const values = data.map((d) => d[key]);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const std = Math.sqrt(
+    values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length
+  );
+  return { mean, std };
+}
+
+function MetricDetailChart({ data, metric }: { data: any[]; metric: string }) {
+  const { mean, std } = calcStats(data, metric);
+  const color = METRIC_COLORS[metric];
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-row items-center justify-between">
+        <p
+          className="text-sm font-semibold capitalize"
+          style={{ color: "var(--cl-font-primary)" }}
+        >
+          {metric}
+        </p>
+        <div className="flex flex-row gap-4">
+          <div className="flex flex-col items-end">
+            <p
+              className="text-xs"
+              style={{ color: "var(--cl-font-secondary)" }}
+            >
+              Mean
+            </p>
+            <p className="text-sm font-bold" style={{ color }}>
+              {mean.toFixed(3)}
+            </p>
+          </div>
+          <div className="flex flex-col items-end">
+            <p
+              className="text-xs"
+              style={{ color: "var(--cl-font-secondary)" }}
+            >
+              Std Dev
+            </p>
+            <p className="text-sm font-bold" style={{ color }}>
+              {std.toFixed(3)}
+            </p>
+          </div>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={160}>
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--cl-border)" />
+          <XAxis
+            dataKey="epoch"
+            tick={{ fontSize: 10, fill: "var(--cl-font-secondary)" }}
+          />
+          <YAxis
+            domain={[0, 1]}
+            tick={{ fontSize: 10, fill: "var(--cl-font-secondary)" }}
+          />
+          <Tooltip
+            contentStyle={{
+              background: "var(--bg-frame)",
+              border: "1px solid var(--cl-border)",
+              borderRadius: 8,
+              fontSize: 11,
+            }}
+          />
+          <ReferenceLine
+            y={mean}
+            stroke={color}
+            strokeDasharray="4 4"
+            strokeOpacity={0.8}
+            label={{ value: "μ", fill: color, fontSize: 10 }}
+          />
+          <ReferenceLine
+            y={mean + std}
+            stroke={color}
+            strokeDasharray="2 4"
+            strokeOpacity={0.4}
+            label={{ value: "+σ", fill: color, fontSize: 10 }}
+          />
+          <ReferenceLine
+            y={mean - std}
+            stroke={color}
+            strokeDasharray="2 4"
+            strokeOpacity={0.4}
+            label={{ value: "-σ", fill: color, fontSize: 10 }}
+          />
+          <Line
+            type="monotone"
+            dataKey={metric}
+            stroke={color}
+            strokeWidth={2}
+            dot={{ fill: color, r: 3 }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
 
 function ConfusionMatrix({ matrix }: { matrix: number[][] }) {
   const labels = ["Positive", "Negative"];
@@ -279,7 +385,7 @@ function ConfusionMatrix({ matrix }: { matrix: number[][] }) {
                 style={{
                   background: isCorrect
                     ? `rgba(15, 146, 247, ${0.2 + intensity * 0.6})`
-                    : `rgba(15, 146, 247, ${0.05})`,
+                    : `rgba(15, 146, 247, 0.05)`,
                   border: isCorrect
                     ? "1px solid var(--cl-blue)"
                     : "1px solid var(--cl-border)",
@@ -381,14 +487,13 @@ function LabelPieChart({ data }: { data: { name: string; value: number }[] }) {
   );
 }
 
-// --- main page ---
-
 export default function Analytics() {
   const mostRecent = experiments.reduce((a, b) => (a.date > b.date ? a : b));
   const [selectedExp, setSelectedExp] = useState(mostRecent);
   const [selectedTraining, setSelectedTraining] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [dropOpen, setDropOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
   const trainings = trainingsByExp[selectedExp.id] ?? [];
@@ -415,9 +520,8 @@ export default function Analytics() {
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node))
         setDropOpen(false);
-      }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -469,7 +573,6 @@ export default function Analytics() {
 
   return (
     <main className="flex-1 overflow-y-auto p-6 bg-[var(--bg-page-user)]">
-      {/* header */}
       <div className="flex flex-col mb-6">
         <h1 className="text-2xl text-[var(--cl-font-primary)] font-semibold">
           Analytics
@@ -479,7 +582,6 @@ export default function Analytics() {
         </p>
       </div>
 
-      {/* search */}
       <div ref={searchRef} className="relative mb-6">
         <InputText
           placeholder="Search experiment..."
@@ -522,7 +624,6 @@ export default function Analytics() {
         )}
       </div>
 
-      {/* macro table */}
       <Card title="Training History" className="mb-4">
         <p
           className="text-xs mb-4 font-semibold"
@@ -541,10 +642,22 @@ export default function Analytics() {
         <Table columns={historyColumns} data={trainings} />
       </Card>
 
-      {/* micro charts */}
       <div className="grid grid-cols-2 gap-4">
         <Card title="Metrics vs Epoch">
-          <ResponsiveContainer width="100%" height={260}>
+          <div className="flex flex-row items-center justify-between mb-3">
+            <p
+              className="text-xs"
+              style={{ color: "var(--cl-font-secondary)" }}
+            >
+              Overview
+            </p>
+            <Button
+              label="Detail"
+              ico={<SvgIcon name="expand" />}
+              onClick={() => setDetailOpen(true)}
+            />
+          </div>
+          <ResponsiveContainer width="100%" height={240}>
             <LineChart data={epochData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--cl-border)" />
               <XAxis
@@ -578,51 +691,17 @@ export default function Analytics() {
                 }}
               />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Line
-                type="monotone"
-                dataKey="dice"
-                stroke="pink"
-                name="Dice"
-                dot={false}
-                strokeWidth={2}
-              />{" "}
-              {/* --cl-blue   */}
-              <Line
-                type="monotone"
-                dataKey="f1"
-                stroke="#0f92f7"
-                name="F1"
-                dot={false}
-                strokeWidth={2}
-              />{" "}
-              {/* --cl-green  */}
-              <Line
-                type="monotone"
-                dataKey="iou"
-                stroke="#ce9200"
-                name="IoU"
-                dot={false}
-                strokeWidth={2}
-              />{" "}
-              {/* --cl-yellow */}
-              <Line
-                type="monotone"
-                dataKey="precision"
-                stroke="purple"
-                name="Precision"
-                dot={false}
-                strokeWidth={2}
-              />{" "}
-              {/* --cl-red    */}
-              <Line
-                type="monotone"
-                dataKey="recall"
-                stroke="#008d00"
-                name="Recall"
-                dot={false}
-                strokeWidth={2}
-              />{" "}
-              {/* --cl-white  */}
+              {METRICS.map((m) => (
+                <Line
+                  key={m}
+                  type="monotone"
+                  dataKey={m}
+                  stroke={METRIC_COLORS[m]}
+                  name={m.charAt(0).toUpperCase() + m.slice(1)}
+                  dot={false}
+                  strokeWidth={2}
+                />
+              ))}
             </LineChart>
           </ResponsiveContainer>
         </Card>
@@ -641,6 +720,37 @@ export default function Analytics() {
           </div>
         </Card>
       </div>
+
+      <Modal
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        title="Metrics Detail"
+        description="Per-metric curves with mean and standard deviation"
+        icon="chart-spline"
+      >
+        <div className="flex flex-col gap-6">
+          {epochData.length === 0 ? (
+            <p
+              className="text-sm text-center"
+              style={{ color: "var(--cl-font-secondary)" }}
+            >
+              No data available
+            </p>
+          ) : (
+            METRICS.map((m) => (
+              <div
+                key={m}
+                style={{
+                  borderBottom: "1px solid var(--cl-border)",
+                  paddingBottom: "1.5rem",
+                }}
+              >
+                <MetricDetailChart data={epochData} metric={m} />
+              </div>
+            ))
+          )}
+        </div>
+      </Modal>
     </main>
   );
 }

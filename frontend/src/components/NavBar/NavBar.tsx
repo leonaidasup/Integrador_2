@@ -82,12 +82,6 @@ export const NavBar: React.FC<NavBarProps> = ({
           />
         </>
       )}
-
-      <Card title="Pro Tip" className="mt-auto">
-        <p className="text-[var(--cl-font-secondary)] text-xs">
-          Use keyboard shortcuts for faster navigation. Press ? for help.
-        </p>
-      </Card>
     </nav>
   );
 };
