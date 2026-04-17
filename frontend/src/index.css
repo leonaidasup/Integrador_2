@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-title-user: #090a0c;
+  --bg-title-admin: #090a0c;
+  --bg-page-user: #020203;
+  --bg-page-admin: #020203;
+  --bg-frame: #08090b;
+  --cl-border: #1f2227;
+
+  --bg-input: #101214;
+  --bg-input-hover: #1f2227;
+  --bg-list: #101214;
+  --bg-tables: #08090b;
+  --bg-tables-selector: #081017;
+
+  --bg-button-primary: #0f92f7;
+  --bg-button-primary-hvr: #4baef9;
+  --bg-button-secondary: #1f2227;
+  --bg-button-secondary-hvr: #3b3e42;
+
+  --cl-font-primary: #eeeeee;
+  --cl-font-secondary: #8f8f8f;
+  --cl-font-third: #0f92f7;
+
+  --cl-red: #d40924;
+  --cl-green: #008d00;
+  --cl-yellow: #ce9200;
+  --cl-blue: #0f92f7;
+  --cl-white: #eeeeee;
+
+  --bg-red: #300910;
+  --bg-green: #062309;
+  --bg-yellow: #2f2409;
+  --bg-blue: #09243a;
+  --bg-white: #eeeeee;
+}
