@@ -9,7 +9,8 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 
-from model import CLASS_NAMES, colorize_mask, load_model, predict
+import auth
+from model import CLASS_NAMES, MODEL_MANAGER, colorize_mask, load_model, predict
 
 ALLOWED_CONTENT_TYPES = {
     "image/png",
@@ -21,9 +22,15 @@ ALLOWED_CONTENT_TYPES = {
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR.parent / "models" / "model.pth"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL = load_model(MODEL_PATH, DEVICE)
+if MODEL_PATH.exists():
+    try:
+        MODEL_MANAGER.load_from_path(MODEL_PATH, DEVICE)
+    except Exception:
+        pass
 
 app = FastAPI(title="Image Segmentation API", version="0.1.0")
+
+app.include_router(auth.router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,11 +49,43 @@ def _pil_to_base64_png(image: Image.Image) -> str:
 
 @app.get("/health")
 def health() -> dict:
+    status = MODEL_MANAGER.status()
     return {
         "status": "ok",
         "device": str(DEVICE),
-        "model_loaded": MODEL is not None,
+        "model_loaded": status["loaded"],
+        "model_framework": status["framework"],
         "classes": CLASS_NAMES,
+    }
+
+
+@app.post("/load_model")
+async def load_model_endpoint(file: UploadFile = File(...)) -> dict:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing model filename.")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".pth", ".keras"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid model type. Allowed: .pth (PyTorch), .keras (Keras).",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded model is empty.")
+
+    try:
+        framework = load_model(data=data, filename=file.filename, device=DEVICE)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    status = MODEL_MANAGER.status()
+    return {
+        "status": "loaded",
+        "filename": file.filename,
+        "framework": framework,
+        "model_loaded": status["loaded"],
     }
 
 
@@ -64,7 +103,10 @@ async def segment(file: UploadFile = File(...)) -> dict:
     except UnidentifiedImageError as exc:
         raise HTTPException(status_code=400, detail="File is not a valid image.") from exc
 
-    mask = predict(image=image, model=MODEL, device=DEVICE)
+    try:
+        mask = predict(image=image, device=DEVICE)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     mask_image = Image.fromarray(mask, mode="L")
     segmented_image = colorize_mask(mask)
 
@@ -73,5 +115,5 @@ async def segment(file: UploadFile = File(...)) -> dict:
         "classes": CLASS_NAMES,
         "mask_base64": _pil_to_base64_png(mask_image),
         "segmented_base64": _pil_to_base64_png(segmented_image),
-        "model_loaded": MODEL is not None,
+        "model_loaded": MODEL_MANAGER.status()["loaded"],
     }
