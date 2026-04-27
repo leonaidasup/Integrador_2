@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { SvgIcon } from "../components/SvgIcon";
 import { InputText } from "../components/InputText";
@@ -60,6 +60,8 @@ const architectureOptions = [
   { label: "EfficientNet", value: "efficientnet" },
 ];
 
+const API_BASE_URL = process.env.REACT_APP_API_URL ?? "http://127.0.0.1:8000";
+
 const textRender = (value: any) => <span className="font-medium">{value}</span>;
 
 export default function Models() {
@@ -68,6 +70,11 @@ export default function Models() {
   const [selectedRow, setSelectedRow] = useState<any>(null);
   const [sort, setSort] = useState("all");
   const [architecture, setArchitecture] = useState("unet");
+  const [modelFile, setModelFile] = useState<File | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [search, setSearch] = useState("");
   const filteredData = data
@@ -100,6 +107,46 @@ export default function Models() {
     { label: "Architecture", value: "architecture" },
     { label: "Size", value: "size" },
   ];
+
+  const handleModelUpload = async () => {
+    if (!modelFile) {
+      setUploadError("Please select a model file before uploading.");
+      return;
+    }
+
+    setUploading(true);
+    setUploadError(null);
+    setUploadStatus(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", modelFile);
+
+      const response = await fetch(`${API_BASE_URL}/load_model`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const payload = (await response.json()) as {
+        status?: string;
+        framework?: string;
+        detail?: string;
+      };
+
+      if (!response.ok) {
+        setUploadError(payload.detail ?? "Model upload failed.");
+        return;
+      }
+
+      setUploadStatus(
+        `Loaded (${payload.framework ?? "unknown"}) - model is ready for use.`,
+      );
+    } catch (error) {
+      setUploadError("Could not reach backend. Check that the API is running.");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const columns = [
     { key: "model", label: "Model", render: textRender },
@@ -278,6 +325,13 @@ export default function Models() {
         icon="brain"
       >
         <div className="flex flex-col gap-4">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pth,.keras"
+            className="hidden"
+            onChange={(event) => setModelFile(event.target.files?.[0] ?? null)}
+          />
           <div className="flex flex-col gap-1">
             <label
               className="text-xs font-semibold"
@@ -334,6 +388,7 @@ export default function Models() {
             <div
               className="flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 cursor-pointer"
               style={{ borderColor: "var(--cl-border)" }}
+              onClick={() => fileInputRef.current?.click()}
             >
               <SvgIcon
                 name="upload"
@@ -350,10 +405,30 @@ export default function Models() {
                 className="text-xs"
                 style={{ color: "var(--cl-font-secondary)" }}
               >
-                Supports .pkl, .h5, .onnx, .pt, .joblib
+                Supports .pth and .keras
               </p>
             </div>
+            {modelFile && (
+              <p
+                className="text-xs"
+                style={{ color: "var(--cl-font-secondary)" }}
+              >
+                Selected: {modelFile.name}
+              </p>
+            )}
           </div>
+
+          {uploadError && (
+            <p className="text-xs" style={{ color: "var(--cl-red)" }}>
+              {uploadError}
+            </p>
+          )}
+
+          {uploadStatus && (
+            <p className="text-xs" style={{ color: "var(--cl-green)" }}>
+              {uploadStatus}
+            </p>
+          )}
 
           <div className="flex flex-row justify-end gap-2 mt-2">
             <Button
@@ -361,7 +436,12 @@ export default function Models() {
               variant="secondary"
               onClick={() => setUploadModalOpen(false)}
             />
-            <Button label="Register Model" ico={<SvgIcon name="plus" />} />
+            <Button
+              label={uploading ? "Uploading..." : "Register Model"}
+              ico={<SvgIcon name="plus" />}
+              disabled={uploading}
+              onClick={handleModelUpload}
+            />
           </div>
         </div>
       </Modal>

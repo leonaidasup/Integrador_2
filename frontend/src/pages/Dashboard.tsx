@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { SvgIcon } from "../components/SvgIcon";
 import { Card } from "../components/Card";
@@ -44,10 +44,81 @@ const data = [
   },
 ];
 
+const API_BASE_URL = process.env.REACT_APP_API_URL ?? "http://127.0.0.1:8000";
+
+type SegmentResult = {
+  filename: string;
+  classes: string[];
+  mask_base64: string;
+  segmented_base64: string;
+  model_loaded: boolean;
+};
+
 export default function Dashboard() {
   const [modelModalOpen, setModelModalOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [search, setSearch] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [segmentResult, setSegmentResult] = useState<SegmentResult | null>(
+    null,
+  );
+  const [segmentError, setSegmentError] = useState<string | null>(null);
+  const [segmenting, setSegmenting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(imageFile);
+    setImagePreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [imageFile]);
+
+  const handleSelectImage = (file: File | null) => {
+    setImageFile(file);
+    setSegmentResult(null);
+    setSegmentError(null);
+  };
+
+  const handleRunSegmentation = async () => {
+    if (!imageFile) {
+      setSegmentError("Please upload an image before running segmentation.");
+      return;
+    }
+
+    setSegmenting(true);
+    setSegmentError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", imageFile);
+
+      const response = await fetch(`${API_BASE_URL}/segment`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const payload = (await response.json()) as SegmentResult & {
+        detail?: string;
+      };
+
+      if (!response.ok) {
+        setSegmentError(payload.detail ?? "Segmentation failed.");
+        return;
+      }
+
+      setSegmentResult(payload);
+    } catch (error) {
+      setSegmentError(
+        "Could not reach backend. Check that the API is running.",
+      );
+    } finally {
+      setSegmenting(false);
+    }
+  };
 
   const filteredData = data.filter((row) => {
     if (!search) return true;
@@ -132,6 +203,15 @@ export default function Dashboard() {
             className="flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-8"
             style={{ borderColor: "var(--cl-border)" }}
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/tiff"
+              className="hidden"
+              onChange={(event) =>
+                handleSelectImage(event.target.files?.[0] ?? null)
+              }
+            />
             <SvgIcon
               name="image"
               className="text-[var(--cl-font-secondary)]"
@@ -150,7 +230,19 @@ export default function Dashboard() {
               Upload high-resolution cell or tissue images for AI-powered
               segmentation analysis
             </p>
-            <Button label="Browse Files" ico={<SvgIcon name="upload" />} />
+            <Button
+              label={imageFile ? "Replace Image" : "Browse Files"}
+              ico={<SvgIcon name="upload" />}
+              onClick={() => fileInputRef.current?.click()}
+            />
+            {imageFile && (
+              <p
+                className="text-xs"
+                style={{ color: "var(--cl-font-secondary)" }}
+              >
+                Selected: {imageFile.name}
+              </p>
+            )}
           </div>
         </Card>
 
@@ -168,8 +260,16 @@ export default function Dashboard() {
                 label="Run Segmentation"
                 ico={<SvgIcon name="play" />}
                 className="ml-auto"
+                disabled={segmenting || !imageFile}
+                onClick={handleRunSegmentation}
               />
             </div>
+
+            {segmentError && (
+              <p className="text-xs" style={{ color: "var(--cl-red)" }}>
+                {segmentError}
+              </p>
+            )}
 
             <div
               className="flex items-center justify-between rounded-lg p-4"
@@ -213,6 +313,52 @@ export default function Dashboard() {
             </div>
           </div>
         </Card>
+
+        {imagePreviewUrl && segmentResult && (
+          <Card title="Segmentation Results">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex flex-col gap-2">
+                <span
+                  className="text-xs font-semibold"
+                  style={{ color: "var(--cl-font-secondary)" }}
+                >
+                  Original
+                </span>
+                <img
+                  src={imagePreviewUrl}
+                  alt="Original microscopy"
+                  className="rounded-lg border border-[var(--cl-border)]"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <span
+                  className="text-xs font-semibold"
+                  style={{ color: "var(--cl-font-secondary)" }}
+                >
+                  Mask
+                </span>
+                <img
+                  src={`data:image/png;base64,${segmentResult.mask_base64}`}
+                  alt="Segmentation mask"
+                  className="rounded-lg border border-[var(--cl-border)]"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <span
+                  className="text-xs font-semibold"
+                  style={{ color: "var(--cl-font-secondary)" }}
+                >
+                  Overlay
+                </span>
+                <img
+                  src={`data:image/png;base64,${segmentResult.segmented_base64}`}
+                  alt="Segmented overlay"
+                  className="rounded-lg border border-[var(--cl-border)]"
+                />
+              </div>
+            </div>
+          </Card>
+        )}
 
         <Card title="Export Results">
           <p

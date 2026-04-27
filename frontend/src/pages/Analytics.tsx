@@ -254,7 +254,7 @@ function calcStats(data: any[], key: string) {
   const values = data.map((d) => d[key]);
   const mean = values.reduce((a, b) => a + b, 0) / values.length;
   const std = Math.sqrt(
-    values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length
+    values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length,
   );
   return { mean, std };
 }
@@ -445,10 +445,12 @@ function LabelPieChart({ data }: { data: { name: string; value: number }[] }) {
                 borderRadius: 8,
                 fontSize: 12,
               }}
-              formatter={(value: number, name: string) => [
-                `${((value / total) * 100).toFixed(1)}%`,
-                name,
-              ]}
+              formatter={(value, name) => {
+                const safeValue =
+                  typeof value === "number" ? value : Number(value ?? 0);
+                const percent = total > 0 ? (safeValue / total) * 100 : 0;
+                return [`${percent.toFixed(1)}%`, String(name ?? "")];
+              }}
             />
           </PieChart>
         </ResponsiveContainer>
@@ -498,20 +500,20 @@ export default function Analytics() {
 
   const trainings = trainingsByExp[selectedExp.id] ?? [];
   const activeId = selectedTraining ?? trainings[0]?.id ?? null;
-  const epochData = activeId ? epochsByTraining[activeId] ?? [] : [];
+  const epochData = activeId ? (epochsByTraining[activeId] ?? []) : [];
   const confMatrix = activeId
-    ? confusionByTraining[activeId] ?? [
+    ? (confusionByTraining[activeId] ?? [
         [0, 0],
         [0, 0],
-      ]
+      ])
     : [
         [0, 0],
         [0, 0],
       ];
-  const labelDist = activeId ? labelDistByTraining[activeId] ?? [] : [];
+  const labelDist = activeId ? (labelDistByTraining[activeId] ?? []) : [];
 
   const filtered = experiments.filter((e) =>
-    e.name.toLowerCase().includes(query.toLowerCase())
+    e.name.toLowerCase().includes(query.toLowerCase()),
   );
 
   useEffect(() => {
