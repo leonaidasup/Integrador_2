@@ -5,6 +5,9 @@
     "compilerOptions": {
         "strict": true,
         "esModuleInterop": true,
+        "types": [
+            "vite/client"
+        ],
         "lib": [
             "dom",
             "es2015"

@@ -9,27 +9,28 @@
   ],
   "main": "src/index.tsx",
   "dependencies": {
-    "loader-utils": "3.2.1",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "react-scripts": "5.0.1",
-    "tailwindcss": "4.2.2",
-    "@tailwindcss/postcss": "4.2.2",
-    "postcss": "8.5.8",
-    "autoprefixer": "10.4.27",
-    "recharts": "3.8.1",
-    "react-is": "19.2.5"
+    "react-is": "19.2.5",
+    "recharts": "3.8.1"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "4.2.2",
     "@types/react": "18.2.38",
     "@types/react-dom": "18.2.15",
-    "typescript": "4.4.4"
+    "@vitejs/plugin-react": "5.0.0",
+    "autoprefixer": "10.4.27",
+    "loader-utils": "3.2.1",
+    "postcss": "^8.5.12",
+    "tailwindcss": "4.2.2",
+    "typescript": "4.4.4",
+    "vite": "6.1.2"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test --env=jsdom",
-    "eject": "react-scripts eject"
+    "start": "vite",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "browserslist": [
     ">0.2%",

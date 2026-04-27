@@ -60,7 +60,8 @@ const architectureOptions = [
   { label: "EfficientNet", value: "efficientnet" },
 ];
 
-const API_BASE_URL = process.env.REACT_APP_API_URL ?? "http://127.0.0.1:8000";
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 const textRender = (value: any) => <span className="font-medium">{value}</span>;
 
