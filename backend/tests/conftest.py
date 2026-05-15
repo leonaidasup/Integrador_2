@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.main import create_app
-from app.services.model_manager import ModelPredictError, colorize_mask
+from app.services.model_manager import ModelPredictError, colorize_mask, compose_overlay
 
 import app.api.routes.health as health_routes
 import app.api.routes.model as model_routes
@@ -34,11 +34,14 @@ class StubModelService:
 
     def predict_mask(self, image: Image.Image) -> np.ndarray:
         if not self.loaded:
-            raise ModelPredictError("No model loaded. Upload one via /load_model.")
+            raise ModelPredictError("No active model available. Please activate a model before segmenting.")
         return np.zeros((image.size[1], image.size[0]), dtype=np.uint8)
 
     def colorize_mask(self, mask: np.ndarray) -> Image.Image:
         return colorize_mask(mask)
+
+    def compose_overlay(self, original_image: Image.Image, mask: np.ndarray, alpha: float = 0.5) -> Image.Image:
+        return compose_overlay(original_image, mask, alpha)
 
 
 @pytest.fixture

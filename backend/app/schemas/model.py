@@ -25,4 +25,5 @@ class SegmentResponse(BaseModel):
     classes: List[str]
     mask_base64: str
     segmented_base64: str
+    overlay_base64: str
     model_loaded: bool

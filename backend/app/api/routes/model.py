@@ -33,10 +33,10 @@ async def load_model_endpoint(file: UploadFile = File(...)) -> LoadModelResponse
         raise HTTPException(status_code=400, detail="Missing model filename.")
 
     ext = Path(file.filename).suffix.lower()
-    if ext not in {".pth", ".keras"}:
+    if ext not in {".h5", ".keras"}:
         raise HTTPException(
             status_code=400,
-            detail="Invalid model type. Allowed: .pth (PyTorch), .keras (Keras).",
+            detail="Invalid model type. Allowed: .h5 (Keras), .keras (Keras).",
         )
 
     data = await file.read()
@@ -84,11 +84,13 @@ async def segment(file: UploadFile = File(...)) -> SegmentResponse:
 
     mask_image = Image.fromarray(mask, mode="L")
     segmented_image = service.colorize_mask(mask)
+    overlay_image = service.compose_overlay(image, mask, alpha=0.5)
 
     return SegmentResponse(
         filename=file.filename,
         classes=service.class_names,
         mask_base64=_pil_to_base64_png(mask_image),
         segmented_base64=_pil_to_base64_png(segmented_image),
+        overlay_base64=_pil_to_base64_png(overlay_image),
         model_loaded=service.status()["loaded"],
     )

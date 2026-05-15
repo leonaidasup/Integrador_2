@@ -5,10 +5,28 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi[standard]>=0.136.1",
+    "bcrypt",
+    "email-validator",
+    "fastapi[standard]",
+    "httpx",
+    "numpy",
+    "pillow",
+    "pyjwt",
+    "pytest",
+    "python-dotenv",
+    "python-multipart",
+    "supabase",
+    "scikit-image",
+    "scipy",
+    "tensorflow",
+    "tensorflow-intel",
+    "torch",
+    "uvicorn[standard]",
+    "websockets",
+    "mlflow"
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.0.3",
+    "pytest==8.3.5",
 ]

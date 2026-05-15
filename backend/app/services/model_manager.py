@@ -6,7 +6,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -67,6 +67,7 @@ def _maybe_sigmoid(values: np.ndarray) -> np.ndarray:
 
 class ModelAdapter:
     framework: str = "unknown"
+    classes: list[str] = CLASS_NAMES
 
     def predict(
         self, image: Image.Image, device: torch.device, preprocess: PreprocessConfig
@@ -114,8 +115,9 @@ class KerasModelAdapter(ModelAdapter):
         self, image: Image.Image, device: torch.device, preprocess: PreprocessConfig
     ) -> np.ndarray:
         batch = _to_numpy_batch(image, preprocess.size)
-        pred = self._model(batch, training=False)
-        pred_np = np.asarray(pred)
+        # Prefer predict() so outputs stay materialized as NumPy arrays even
+        # when TensorFlow eager execution has been disabled by other modules.
+        pred_np = np.asarray(self._model.predict(batch, verbose=0))
 
         if pred_np.ndim != 4:
             raise ModelPredictError("Keras model output must be a 4D tensor.")
@@ -137,6 +139,32 @@ class KerasModelAdapter(ModelAdapter):
             mask_small = np.argmax(pred_np[0], axis=-1).astype(np.uint8)
 
         return _resize_mask(mask_small, image.size)
+
+
+class MaskRCNNModelAdapter(ModelAdapter):
+    framework = "mask_rcnn"
+
+    def __init__(self, model: object, classes: list[str], preprocess_size: int) -> None:
+        self._model = model
+        self.classes = classes
+        self._preprocess_size = preprocess_size
+
+    def predict(
+        self, image: Image.Image, device: torch.device, preprocess: PreprocessConfig
+    ) -> np.ndarray:
+        image_rgb = image.convert("RGB")
+        result = self._model.detect([np.array(image_rgb)], verbose=0)[0]
+        masks = result.get("masks")
+        class_ids = result.get("class_ids")
+
+        if masks is None or class_ids is None:
+            raise ModelPredictError("Mask R-CNN result must include masks and class_ids.")
+
+        mask = np.zeros((image_rgb.height, image_rgb.width), dtype=np.uint8)
+        for index, class_id in enumerate(class_ids):
+            if index < masks.shape[-1]:
+                mask[masks[:, :, index].astype(bool)] = int(class_id)
+        return mask
 
 
 def _load_pytorch_model(data: bytes, device: torch.device) -> TorchModelAdapter:
@@ -168,7 +196,7 @@ def _load_keras_model(data: bytes) -> KerasModelAdapter:
         return KerasModelAdapter(model)
     except Exception as exc:
         raise ModelLoadError(
-            "Failed to load .keras. Ensure it is a Keras model and includes any custom layers."
+            "Failed to load .keras/.h5 model. Ensure it is a valid Keras model and includes any custom layers."
         ) from exc
     finally:
         if temp_path:
@@ -176,6 +204,103 @@ def _load_keras_model(data: bytes) -> KerasModelAdapter:
                 os.remove(temp_path)
             except OSError:
                 pass
+
+
+def _infer_framework(filename: str, architecture: Optional[str], framework: Optional[str]) -> str:
+    if architecture == "mask_rcnn":
+        return "mask_rcnn"
+    if framework:
+        return framework
+    ext = Path(filename).suffix.lower()
+    if ext in {".h5", ".keras"}:
+        return "keras"
+    if ext in {".pth", ".pt"}:
+        return "pytorch"
+    return "unknown"
+
+
+def _load_full_model_from_path(
+    model_path: Path, device: torch.device, framework: Optional[str]
+) -> ModelAdapter:
+    data = model_path.read_bytes()
+    ext = model_path.suffix.lower()
+    if framework == "pytorch" or ext in {".pth", ".pt"}:
+        return _load_pytorch_model(data, device)
+    if framework in {None, "keras", "tensorflow"} or ext in {".h5", ".keras"}:
+        return _load_keras_model(data)
+    raise ModelLoadError(f"Unsupported full-model framework '{framework}'.")
+
+
+def _build_mask_rcnn_config(config: dict[str, Any], classes: list[str]) -> object:
+    try:
+        from app.models.mrcnn.config import Config
+    except Exception as exc:
+        raise ModelLoadError("Mask R-CNN config support is unavailable.") from exc
+
+    if not classes:
+        raise ModelLoadError("Mask R-CNN activation requires class names.")
+
+    expected_num_classes = int(config.get("NUM_CLASSES", len(classes)))
+    if expected_num_classes != len(classes):
+        raise ModelLoadError(
+            "Mask R-CNN NUM_CLASSES must match the number of class names, including background."
+        )
+
+    allowed_keys = {
+        "NAME",
+        "NUM_CLASSES",
+        "BACKBONE",
+        "IMAGE_MIN_DIM",
+        "IMAGE_MAX_DIM",
+        "IMAGE_RESIZE_MODE",
+        "GPU_COUNT",
+        "IMAGES_PER_GPU",
+        "DETECTION_MIN_CONFIDENCE",
+        "DETECTION_NMS_THRESHOLD",
+        "DETECTION_MAX_INSTANCES",
+    }
+    attrs = {
+        "NAME": config.get("NAME", "registry_mask_rcnn"),
+        "NUM_CLASSES": expected_num_classes,
+        "GPU_COUNT": 1,
+        "IMAGES_PER_GPU": 1,
+    }
+    for key, value in config.items():
+        if key in allowed_keys:
+            attrs[key] = value
+
+    return type("RegistryMaskRCNNConfig", (Config,), attrs)()
+
+
+def _load_mask_rcnn_weights(model_path: Path, config: dict[str, Any], classes: list[str]) -> MaskRCNNModelAdapter:
+    if model_path.suffix.lower() != ".h5":
+        raise ModelLoadError("Mask R-CNN weights must be uploaded as a .h5 artifact.")
+
+    runtime_config = _build_mask_rcnn_config(config, classes)
+    model_dir = str(model_path.parent / "mrcnn_logs")
+    try:
+        from app.models.mrcnn.model import MaskRCNN
+    except (ImportError, AttributeError):
+        try:
+            from mrcnn.model import MaskRCNN
+        except Exception as exc:
+            raise ModelLoadError(
+                "Mask R-CNN runtime is unavailable. "
+                "backend/app/models/mrcnn/model.py could not import MaskRCNN, "
+                "and no external mrcnn.model package is installed. Check that "
+                "the vendored Mask R-CNN files use app.models.mrcnn package imports."
+            ) from exc
+    except Exception as exc:
+        raise ModelLoadError(f"Mask R-CNN runtime failed to import: {exc}") from exc
+
+    try:
+        model = MaskRCNN(mode="inference", model_dir=model_dir, config=runtime_config)
+        model.load_weights(str(model_path), by_name=True)
+    except Exception as exc:
+        raise ModelLoadError(f"Failed to load Mask R-CNN weights: {exc}") from exc
+
+    image_size = int(getattr(runtime_config, "IMAGE_MAX_DIM", 1024))
+    return MaskRCNNModelAdapter(model, classes=classes, preprocess_size=image_size)
 
 
 class ModelManager:
@@ -193,12 +318,10 @@ class ModelManager:
             raise ModelLoadError("Uploaded file is empty.")
 
         ext = Path(filename).suffix.lower()
-        if ext == ".pth":
-            adapter = _load_pytorch_model(data, device)
-        elif ext == ".keras":
+        if ext == ".h5" or ext == ".keras":
             adapter = _load_keras_model(data)
         else:
-            raise ModelLoadError("Unsupported model format. Use .pth or .keras.")
+            raise ModelLoadError("Unsupported model format. Use .h5 or .keras.")
 
         with self._lock:
             self._adapter = adapter
@@ -207,12 +330,43 @@ class ModelManager:
 
         return adapter.framework
 
-    def load_from_path(self, model_path: Path, device: torch.device) -> bool:
+    def load_from_path(
+        self,
+        model_path: Path,
+        device: torch.device,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> bool:
         if not model_path.exists():
             return False
 
-        data = model_path.read_bytes()
-        self.load_from_bytes(data, model_path.name, device)
+        metadata = metadata or {}
+        artifact_type = metadata.get("artifact_type", "full_model")
+        architecture = metadata.get("architecture")
+        framework = _infer_framework(model_path.name, architecture, metadata.get("framework"))
+        classes = metadata.get("classes") or CLASS_NAMES
+        config = metadata.get("config") or {}
+
+        try:
+            if artifact_type == "weights":
+                if architecture == "mask_rcnn":
+                    adapter = _load_mask_rcnn_weights(model_path, config, classes)
+                else:
+                    raise ModelLoadError(
+                        f"Weights-only activation is not supported for architecture '{architecture}'."
+                    )
+            else:
+                adapter = _load_full_model_from_path(model_path, device, framework)
+                adapter.classes = classes
+        except ModelLoadError as exc:
+            with self._lock:
+                self._last_error = str(exc)
+            raise
+
+        with self._lock:
+            self._adapter = adapter
+            self._framework = adapter.framework
+            self._preprocess = PreprocessConfig(size=int(config.get("input_size", self._preprocess.size)))
+            self._last_error = None
         return True
 
     def predict(self, image: Image.Image, device: torch.device) -> np.ndarray:
@@ -220,7 +374,7 @@ class ModelManager:
             adapter = self._adapter
 
         if adapter is None:
-            raise ModelPredictError("No model loaded. Upload one via /load_model.")
+            raise ModelPredictError("No active model available. Please activate a model before segmenting.")
 
         return adapter.predict(image, device, self._preprocess)
 
@@ -231,10 +385,20 @@ class ModelManager:
 
         return {
             "loaded": adapter is not None,
+            "active": adapter is not None,
             "framework": framework,
             "input_size": self._preprocess.size,
             "last_error": self._last_error,
         }
+
+    def get_class_names(self) -> list[str]:
+        """Return class names from the active model, or default classes if none loaded."""
+        with self._lock:
+            adapter = self._adapter
+
+        if adapter is None:
+            return CLASS_NAMES
+        return getattr(adapter, "classes", CLASS_NAMES)
 
 
 MODEL_MANAGER = ModelManager()
@@ -255,3 +419,37 @@ def colorize_mask(mask: np.ndarray) -> Image.Image:
     for class_id, rgb in CLASS_COLORS.items():
         color[mask == class_id] = rgb
     return Image.fromarray(color, mode="RGB")
+
+
+def compose_overlay(original_image: Image.Image, mask: np.ndarray, alpha: float = 0.5) -> Image.Image:
+    """
+    Alpha-composite the colorized mask over the original image.
+    
+    Args:
+        original_image: Original PIL Image
+        mask: Class mask array with shape (H, W)
+        alpha: Transparency level for the mask overlay (0.0-1.0)
+    
+    Returns:
+        Overlay image with same dimensions as original
+    """
+    # Ensure original image is RGB
+    if original_image.mode != "RGB":
+        original_image = original_image.convert("RGB")
+    
+    # Colorize the mask
+    colored_mask = colorize_mask(mask)
+    
+    # Resize colored mask to match original image dimensions if needed
+    if colored_mask.size != original_image.size:
+        colored_mask = colored_mask.resize(original_image.size, Image.NEAREST)
+    
+    # Convert to numpy arrays for compositing
+    original_arr = np.array(original_image, dtype=np.float32)
+    mask_arr = np.array(colored_mask, dtype=np.float32)
+    
+    # Alpha blend: output = original * (1 - alpha) + mask * alpha
+    overlay_arr = original_arr * (1.0 - alpha) + mask_arr * alpha
+    overlay_arr = np.clip(overlay_arr, 0, 255).astype(np.uint8)
+    
+    return Image.fromarray(overlay_arr, mode="RGB")

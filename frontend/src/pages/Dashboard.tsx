@@ -51,6 +51,7 @@ type SegmentResult = {
   classes: string[];
   mask_base64: string;
   segmented_base64: string;
+  overlay_base64: string;
   model_loaded: boolean;
 };
 
@@ -316,7 +317,7 @@ export default function Dashboard() {
 
         {imagePreviewUrl && segmentResult && (
           <Card title="Segmentation Results">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="flex flex-col gap-2">
                 <span
                   className="text-xs font-semibold"
@@ -335,11 +336,11 @@ export default function Dashboard() {
                   className="text-xs font-semibold"
                   style={{ color: "var(--cl-font-secondary)" }}
                 >
-                  Mask
+                  Segmented
                 </span>
                 <img
-                  src={`data:image/png;base64,${segmentResult.mask_base64}`}
-                  alt="Segmentation mask"
+                  src={`data:image/png;base64,${segmentResult.segmented_base64}`}
+                  alt="Segmented visualization"
                   className="rounded-lg border border-[var(--cl-border)]"
                 />
               </div>
@@ -351,8 +352,8 @@ export default function Dashboard() {
                   Overlay
                 </span>
                 <img
-                  src={`data:image/png;base64,${segmentResult.segmented_base64}`}
-                  alt="Segmented overlay"
+                  src={`data:image/png;base64,${segmentResult.overlay_base64}`}
+                  alt="Overlay composition"
                   className="rounded-lg border border-[var(--cl-border)]"
                 />
               </div>

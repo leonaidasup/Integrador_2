@@ -10,8 +10,6 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Put your model in `models/model.pth`
-
 Start backend:
 
 ```bash
@@ -21,9 +19,19 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 Backend structure:
 
 - `app/api/routes`: FastAPI route modules
-- `app/services`: model/auth service logic
+  - `health.py`: Health check endpoints
+  - `auth.py`: Authentication endpoints
+  - `model.py`: Legacy model loading and segmentation
+  - `registry.py`: Model registry management
+- `app/services`: service logic
+  - `model_manager.py`: Model loading and inference
+  - `registry.py`: Model registry with Supabase persistence
+  - `mlflow_logger.py`: MLflow tracking for model lineage
 - `app/core`: configuration and clients
 - `app/schemas`: Pydantic request/response schemas
+- `models/`: Local model artifact storage
+- `mlruns/`: MLflow tracking directory
+- `migrations/`: Database migration files
 
 Health check:
 
@@ -40,28 +48,57 @@ npm start
 Optional API override (defaults to http://127.0.0.1:8000):
 
 ```bash
-set REACT_APP_API_URL=http://127.0.0.1:8000
+set VITE_API_URL=http://127.0.0.1:8000
 ```
 
-## Backend tests
+## Model Registry Workflow
+
+The new model registry allows uploading, managing, and activating models for segmentation.
+
+### Model Registry API
+
+**Upload a model:**
+
+```
+POST /registry/models/upload
+- Parameters: name, version, description (optional), file
+- Returns: ModelRegistryResponse with model ID, metadata
+```
+
+**List all models:**
+
+```
+GET /registry/models
+- Returns: ModelListResponse with all registered models
+```
+
+**Get active model:**
+
+```
+GET /registry/models/active
+- Returns: Currently active ModelRegistryResponse
+- Error 503: No active model
+```
+
+**Activate a model:**
+
+```
+POST /registry/models/{model_id}/activate
+- Returns: Activated ModelRegistryResponse
+- Note: Deactivates all other models atomically
+```
+
+**Delete a model:**
+
+```
+DELETE /registry/models/{model_id}
+- Returns: Deletion confirmation
+- Note: Removes both metadata and artifact files
+```
+
+## Backend Tests
 
 ```bash
 cd backend
 pytest
 ```
-
-## API contract
-
-- Endpoint: `POST /segment`
-- Input: multipart form-data with field `file`
-- Output JSON:
-  - `mask_base64`: grayscale mask PNG (0,1,2 class IDs)
-  - `segmented_base64`: RGB visualization PNG
-  - `classes`: class names
-  - `model_loaded`: whether model loaded successfully
-
-## Notes
-
-- If model loading fails, backend automatically uses a simple fallback segmentation
-  based on intensity thresholds. This keeps the MVP functional during integration.
-- Allowed image formats: PNG, JPG/JPEG, TIFF.
