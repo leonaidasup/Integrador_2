@@ -7,6 +7,7 @@ import { SelectList } from "../SelectList";
 import { ToggleRow } from "../ToggleRow";
 
 interface HeaderProps {
+  userName?: string;
   children?: React.ReactNode;
   onLogout?: () => void;
 }
@@ -117,14 +118,14 @@ const SelectRow: React.FC<SelectRowProps> = ({
 
 // ─── componente principal ──────────────────────────────────────────────────
 
-export const Header: React.FC<HeaderProps> = ({ children, onLogout }) => {
+export const Header: React.FC<HeaderProps> = ({ children, onLogout, userName }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   const [profile, setProfile] = useState<ProfileForm>({
-    name: "",
+    name: userName ?? "",
     email: "",
     role: "",
     bio: "",
@@ -234,6 +235,19 @@ export const Header: React.FC<HeaderProps> = ({ children, onLogout }) => {
             />
 
             <div style={dropdownStyles(menuOpen)}>
+              {userName && (
+                <div
+                  style={{
+                    padding: "10px 16px 8px",
+                    borderBottom: "1px solid var(--cl-border)",
+                    marginBottom: "4px",
+                  }}
+                >
+                  <p className="text-sm font-semibold" style={{ color: "var(--cl-font-primary)" }}>
+                    {userName}
+                  </p>
+                </div>
+              )}
               {menuItems.map((item) => (
                 <button
                   key={item.label}

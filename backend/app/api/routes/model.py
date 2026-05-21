@@ -4,12 +4,13 @@ import base64
 import io
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
 
 from app.schemas.model import LoadModelResponse, SegmentResponse
 from app.services.model_manager import ModelLoadError, ModelPredictError
 from app.services.model_service import get_model_service
+from app.api.routes.auth import get_current_user, UserResponse
 
 router = APIRouter(tags=["model"])
 
@@ -28,7 +29,7 @@ def _pil_to_base64_png(image: Image.Image) -> str:
 
 
 @router.post("/load_model", response_model=LoadModelResponse)
-async def load_model_endpoint(file: UploadFile = File(...)) -> LoadModelResponse:
+async def load_model_endpoint(file: UploadFile = File(...), current_user: UserResponse = Depends(get_current_user)) -> LoadModelResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing model filename.")
 
@@ -61,7 +62,7 @@ async def load_model_endpoint(file: UploadFile = File(...)) -> LoadModelResponse
 
 
 @router.post("/segment", response_model=SegmentResponse)
-async def segment(file: UploadFile = File(...)) -> SegmentResponse:
+async def segment(file: UploadFile = File(...), current_user: UserResponse = Depends(get_current_user)) -> SegmentResponse:
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=400,

@@ -29,17 +29,17 @@ class ModelRegistry:
         
         # Ensure artifact directory exists
         self._artifact_base_path.mkdir(parents=True, exist_ok=True)
-        
-        # Load existing models from Supabase on init
-        self._load_models_from_db()
 
-    def _load_models_from_db(self) -> None:
-        """Load all models from Supabase into cache."""
+    def _load_models_from_db(self, user_id: str | None = None) -> None:
+        """Load models from Supabase into cache, scoped to user_id."""
         if not self._supabase:
             return
         
         try:
-            response = self._supabase.table("models").select("*").execute()
+            query = self._supabase.table("models").select("*")
+            if user_id:
+                query = query.eq("uploaded_by", user_id)
+            response = query.execute()
             if response.data:
                 with self._lock:
                     for model_data in response.data:
@@ -211,22 +211,28 @@ class ModelRegistry:
         
         return ModelRegistryResponse(**model_data)
 
-    def list_models(self) -> ModelListResponse:
-        """Get all registered models."""
+    def list_models(self, user_id: str | None = None) -> ModelListResponse:
+        """Get all registered models, optionally filtered by owner."""
         with self._lock:
             models = [self._normalize_model_data(m) for m in self._models_cache.values()]
+        
+        if user_id is not None:
+            models = [m for m in models if m.get("uploaded_by") == user_id]
         
         return ModelListResponse(
             models=[ModelRegistryResponse(**m) for m in models],
             total=len(models),
         )
 
-    def get_active_model(self) -> Optional[ModelRegistryResponse]:
-        """Get the currently active model."""
+    def get_active_model(self, user_id: str | None = None) -> Optional[ModelRegistryResponse]:
+        """Get the currently active model, optionally scoped to a user."""
         with self._lock:
             if not self._active_model_id or self._active_model_id not in self._models_cache:
                 return None
             model_data = self._normalize_model_data(self._models_cache[self._active_model_id])
+        
+        if user_id is not None and model_data.get("uploaded_by") != user_id:
+            return None
         
         return ModelRegistryResponse(**model_data)
 
@@ -329,13 +335,8 @@ class ModelRegistry:
             return self._to_absolute_path(model_data["artifact_path"])
 
 
-# Global registry instance
-_registry: Optional[ModelRegistry] = None
-
-
-def get_model_registry(supabase_client=None) -> ModelRegistry:
-    """Get or create the global model registry."""
-    global _registry
-    if _registry is None or (supabase_client is not None and _registry._supabase is None):
-        _registry = ModelRegistry(supabase_client)
-    return _registry
+def get_model_registry(supabase_client=None, user_id: str | None = None) -> ModelRegistry:
+    """Create a user-scoped model registry instance."""
+    registry = ModelRegistry(supabase_client)
+    registry._load_models_from_db(user_id=user_id)
+    return registry

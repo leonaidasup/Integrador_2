@@ -90,6 +90,8 @@ export default function Models() {
   const [architecture, setArchitecture] = useState("keras");
   const [artifactType, setArtifactType] = useState<ArtifactType>("full_model");
   const [classNames, setClassNames] = useState("background, few-layer, bulk");
+  const [encoder, setEncoder] = useState("");
+  const [inputSize, setInputSize] = useState("224");
   const [configJson, setConfigJson] = useState(
     JSON.stringify(defaultConfig, null, 2),
   );
@@ -105,7 +107,10 @@ export default function Models() {
     setLoadingModels(true);
     setRegistryError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/registry/models`);
+      const token = localStorage.getItem("auth_token") ?? "";
+      const response = await fetch(`${API_BASE_URL}/registry/models`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       const payload = (await response.json()) as ModelListResponse & ApiError;
       if (!response.ok) {
         setRegistryError(payload.detail ?? "Could not load models.");
@@ -158,6 +163,8 @@ export default function Models() {
     setArchitecture("keras");
     setArtifactType("full_model");
     setClassNames("background, few-layer, bulk");
+    setEncoder("");
+    setInputSize("224");
     setConfigJson(JSON.stringify(defaultConfig, null, 2));
     setModelFile(null);
     setUploadError(null);
@@ -212,9 +219,13 @@ export default function Models() {
       formData.append("artifact_type", artifactType);
       formData.append("classes", JSON.stringify(parsedClasses));
       formData.append("config", JSON.stringify(parsedConfig));
+      if (encoder.trim()) formData.append("encoder", encoder.trim());
+      if (inputSize.trim()) formData.append("input_size", inputSize.trim());
 
+      const token = localStorage.getItem("auth_token") ?? "";
       const response = await fetch(`${API_BASE_URL}/registry/models/upload`, {
         method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
       const payload = (await response.json()) as RegistryModel & ApiError;
@@ -239,8 +250,10 @@ export default function Models() {
     setActivatingId(modelId);
     setActivationError(null);
     try {
+      const token = localStorage.getItem("auth_token") ?? "";
       const response = await fetch(`${API_BASE_URL}/registry/models/${modelId}/activate`, {
         method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
       });
       const payload = (await response.json()) as RegistryModel & ApiError;
       if (!response.ok) {
@@ -520,6 +533,29 @@ export default function Models() {
               value={classNames}
               onChange={(event) => setClassNames(event.target.value)}
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>
+                Encoder <span style={{ color: "var(--cl-font-secondary)", fontWeight: 400 }}>(optional)</span>
+              </label>
+              <InputText
+                placeholder="e.g. resnet34, efficientnet-b0"
+                value={encoder}
+                onChange={(e) => setEncoder(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>
+                Input Size (px)
+              </label>
+              <InputText
+                placeholder="224"
+                value={inputSize}
+                onChange={(e) => setInputSize(e.target.value)}
+              />
+            </div>
           </div>
 
           <div className="flex flex-col gap-1">
