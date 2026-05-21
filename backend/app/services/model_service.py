@@ -56,14 +56,23 @@ class ModelService:
                 logger.exception("Failed to bootstrap legacy model from %s.", self._model_path)
 
     def _ensure_registry(self):
-        if not self._registry:
-            try:
-                from app.services.registry import get_model_registry
-                self._registry = get_model_registry()
-            except Exception as exc:
-                raise model_manager.ModelLoadError(
-                    f"Failed to initialize model registry: {exc}"
-                ) from exc
+        try:
+            # Prefer a Supabase-backed registry so active models persisted in DB
+            # are visible after application restarts.
+            from app.core.supabase_client import get_supabase_client
+            from app.services.registry import get_model_registry
+
+            supabase = get_supabase_client()
+            self._registry = get_model_registry(supabase)
+        except Exception:
+            if not self._registry:
+                try:
+                    from app.services.registry import get_model_registry
+                    self._registry = get_model_registry()
+                except Exception as exc:
+                    raise model_manager.ModelLoadError(
+                        f"Failed to initialize model registry: {exc}"
+                    ) from exc
         return self._registry
 
     def load_registry_model(self, model_id: str) -> bool:
@@ -140,6 +149,12 @@ class ModelService:
         return model_manager.load_model(data, filename, self._device)
 
     def predict_mask(self, image: Image.Image) -> np.ndarray:
+        status = self._manager.status()
+        if not status.get("loaded"):
+            try:
+                self.load_active_model_from_registry()
+            except Exception:
+                logger.exception("Failed to auto-load active model before prediction.")
         return model_manager.predict(image, self._device)
 
     def colorize_mask(self, mask: np.ndarray) -> Image.Image:

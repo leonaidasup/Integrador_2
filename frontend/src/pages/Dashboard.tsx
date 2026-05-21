@@ -46,6 +46,21 @@ const data = [
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
+const SEGMENTATION_COLOR_MAP: Record<string, string> = {
+  background: "#000000",
+  "few-layer": "#00aaff",
+  bulk: "#ff8c00",
+};
+
+const SEGMENTATION_COLOR_FALLBACKS = [
+  "#000000",
+  "#00aaff",
+  "#ff8c00",
+  "#8b5cf6",
+  "#22c55e",
+  "#ef4444",
+];
+
 type SegmentResult = {
   filename: string;
   classes: string[];
@@ -120,6 +135,17 @@ export default function Dashboard() {
       setSegmenting(false);
     }
   };
+
+  const segmentationLegend = segmentResult
+    ? segmentResult.classes.map((label, index) => ({
+        label,
+        color:
+          SEGMENTATION_COLOR_MAP[label.toLowerCase()] ??
+          SEGMENTATION_COLOR_FALLBACKS[
+            index % SEGMENTATION_COLOR_FALLBACKS.length
+          ],
+      }))
+    : [];
 
   const filteredData = data.filter((row) => {
     if (!search) return true;
@@ -258,13 +284,44 @@ export default function Dashboard() {
               />
 
               <Button
-                label="Run Segmentation"
+                label={segmenting ? "Segmenting..." : "Run Segmentation"}
                 ico={<SvgIcon name="play" />}
                 className="ml-auto"
                 disabled={segmenting || !imageFile}
                 onClick={handleRunSegmentation}
               />
             </div>
+
+            {segmenting && (
+              <div
+                className="flex items-center gap-3 rounded-lg px-4 py-3"
+                style={{
+                  background: "var(--bg-blue)",
+                  border: "1px solid var(--cl-blue)",
+                }}
+                aria-live="polite"
+                aria-busy="true"
+              >
+                <span className="relative flex h-4 w-4">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--cl-blue)] opacity-60" />
+                  <span className="relative inline-flex h-4 w-4 rounded-full bg-[var(--cl-blue)]" />
+                </span>
+                <div className="flex flex-col gap-0.5">
+                  <span
+                    className="text-sm font-semibold"
+                    style={{ color: "var(--cl-blue)" }}
+                  >
+                    Segmenting image
+                  </span>
+                  <span
+                    className="text-xs"
+                    style={{ color: "var(--cl-font-secondary)" }}
+                  >
+                    Please wait while the model analyzes the uploaded image.
+                  </span>
+                </div>
+              </div>
+            )}
 
             {segmentError && (
               <p className="text-xs" style={{ color: "var(--cl-red)" }}>
@@ -317,45 +374,105 @@ export default function Dashboard() {
 
         {imagePreviewUrl && segmentResult && (
           <Card title="Segmentation Results">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="flex flex-col gap-2">
-                <span
-                  className="text-xs font-semibold"
-                  style={{ color: "var(--cl-font-secondary)" }}
-                >
-                  Original
-                </span>
-                <img
-                  src={imagePreviewUrl}
-                  alt="Original microscopy"
-                  className="rounded-lg border border-[var(--cl-border)]"
-                />
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_1fr]">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="flex flex-col gap-2">
+                  <span
+                    className="text-xs font-semibold"
+                    style={{ color: "var(--cl-font-secondary)" }}
+                  >
+                    Original
+                  </span>
+                  <img
+                    src={imagePreviewUrl}
+                    alt="Original microscopy"
+                    className="rounded-lg border border-[var(--cl-border)]"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <span
+                    className="text-xs font-semibold"
+                    style={{ color: "var(--cl-font-secondary)" }}
+                  >
+                    Segmented
+                  </span>
+                  <img
+                    src={`data:image/png;base64,${segmentResult.segmented_base64}`}
+                    alt="Segmented visualization"
+                    className="rounded-lg border border-[var(--cl-border)]"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <span
+                    className="text-xs font-semibold"
+                    style={{ color: "var(--cl-font-secondary)" }}
+                  >
+                    Overlay
+                  </span>
+                  <img
+                    src={`data:image/png;base64,${segmentResult.overlay_base64}`}
+                    alt="Overlay composition"
+                    className="rounded-lg border border-[var(--cl-border)]"
+                  />
+                </div>
               </div>
-              <div className="flex flex-col gap-2">
-                <span
-                  className="text-xs font-semibold"
-                  style={{ color: "var(--cl-font-secondary)" }}
-                >
-                  Segmented
-                </span>
-                <img
-                  src={`data:image/png;base64,${segmentResult.segmented_base64}`}
-                  alt="Segmented visualization"
-                  className="rounded-lg border border-[var(--cl-border)]"
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <span
-                  className="text-xs font-semibold"
-                  style={{ color: "var(--cl-font-secondary)" }}
-                >
-                  Overlay
-                </span>
-                <img
-                  src={`data:image/png;base64,${segmentResult.overlay_base64}`}
-                  alt="Overlay composition"
-                  className="rounded-lg border border-[var(--cl-border)]"
-                />
+
+              <div
+                className="flex flex-col gap-3 rounded-xl p-4"
+                style={{
+                  background: "var(--bg-tables-selector)",
+                  border: "1px solid var(--cl-border)",
+                }}
+              >
+                <div className="flex flex-col gap-1">
+                  <span
+                    className="text-sm font-semibold"
+                    style={{ color: "var(--cl-font-primary)" }}
+                  >
+                    Color Legend
+                  </span>
+                  <span
+                    className="text-xs"
+                    style={{ color: "var(--cl-font-secondary)" }}
+                  >
+                    Each color corresponds to one label returned by the model.
+                  </span>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  {segmentationLegend.map((item) => (
+                    <div
+                      key={item.label}
+                      className="flex items-center gap-3 rounded-lg px-3 py-2"
+                      style={{ background: "var(--bg-tables)" }}
+                    >
+                      <span
+                        className="h-4 w-4 rounded-sm border"
+                        style={{
+                          backgroundColor: item.color,
+                          borderColor:
+                            item.color === "#000000"
+                              ? "var(--cl-border)"
+                              : item.color,
+                        }}
+                      />
+                      <div className="flex flex-col">
+                        <span
+                          className="text-sm font-medium"
+                          style={{ color: "var(--cl-font-primary)" }}
+                        >
+                          {item.label}
+                        </span>
+                        <span
+                          className="text-xs uppercase tracking-wider"
+                          style={{ color: "var(--cl-font-secondary)" }}
+                        >
+                          {item.color}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </Card>
