@@ -132,3 +132,5 @@ RETURNS void AS $$
   WHERE id = ds_id;
 $$ LANGUAGE sql;
 
+ALTER TABLE public.images ADD COLUMN IF NOT EXISTS split TEXT DEFAULT 'train';
+ALTER TABLE public.images ADD COLUMN IF NOT EXISTS annotations_path TEXT;

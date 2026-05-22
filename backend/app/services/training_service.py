@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -12,7 +13,11 @@ import numpy as np
 import torch
 from PIL import Image
 
+from app.core.supabase_client import get_supabase_client
+from app.services.fine_tuning_service import FineTuningService
 from app.services.model_manager import MODEL_MANAGER, ModelLoadError, ModelPredictError
+
+logger = logging.getLogger(__name__)
 
 
 class TrainingStatus(str, Enum):
@@ -309,80 +314,42 @@ class TrainingService:
             _persist_experiment(state)
 
             try:
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                adapter = MODEL_MANAGER._adapter
-                if adapter is None:
-                    raise RuntimeError("No active model loaded.")
+                # Initialize fine-tuning service
+                fine_tuner = FineTuningService(state.id, state.user_id)
 
-                for epoch in range(1, state.epochs + 1):
-                    if state._cancel_flag:
-                        state.status = TrainingStatus.CANCELLED
-                        state.finished_at = _now_iso()
-                        state.notify()
-                        _persist_experiment(state)
-                        return
+                # Run fine-tuning
+                logger.info(f"Starting fine-tuning for experiment {state.id}")
+                result = fine_tuner.train()
 
-                    state._pause_event.wait()
+                if result["status"] == "failed":
+                    raise RuntimeError(result.get("error", "Training failed"))
 
-                    if state._cancel_flag:
-                        state.status = TrainingStatus.CANCELLED
-                        state.finished_at = _now_iso()
-                        state.notify()
-                        _persist_experiment(state)
-                        return
+                # Update state with results
+                state.epoch_history = result.get("epoch_history", [])
+                state.current_epoch = result.get("epochs_trained", 0)
 
-                    epoch_start = time.time()
+                # Extract final metrics
+                if state.epoch_history:
+                    final_epoch = state.epoch_history[-1]
+                    state.best_loss = min([e.get("val_loss", float("inf")) for e in state.epoch_history])
+                    state.best_iou = max([e.get("val_iou", 0) for e in state.epoch_history])
+                    state.best_accuracy = max([e.get("val_f1", 0) for e in state.epoch_history])
 
-                    # Run inference on available images
-                    for img in images[:min(len(images), 5)]:
-                        try:
-                            MODEL_MANAGER.predict(img, device)
-                        except (ModelPredictError, Exception):
-                            pass
-
-                    # Simulate epoch time
-                    time.sleep(0.5)
-
-                    epoch_duration = round(time.time() - epoch_start, 3)
-
-                    # ── Compute / simulate metrics ──────────────────────────
-                    metrics = _simulate_epoch_metrics(epoch, state.epochs)
-                    # TODO: replace _simulate_epoch_metrics() with real values
-                    # from your training loop, e.g.:
-                    #   metrics = your_train_one_epoch(model, loader, optimizer)
-
-                    epoch_record = {
-                        "epoch": epoch,
-                        "duration_seconds": epoch_duration,
-                        **metrics,
-                    }
-                    state.epoch_history.append(epoch_record)
-                    state.current_epoch = epoch
-
-                    # Update bests
-                    loss = metrics.get("loss")
-                    iou = metrics.get("iou")
-                    accuracy = metrics.get("accuracy")
-                    if loss is not None and (state.best_loss is None or loss < state.best_loss):
-                        state.best_loss = loss
-                    if iou is not None and (state.best_iou is None or iou > state.best_iou):
-                        state.best_iou = iou
-                    if accuracy is not None and (state.best_accuracy is None or accuracy > state.best_accuracy):
-                        state.best_accuracy = accuracy
-
-                    # Notify SSE subscribers with metrics
-                    progress = EpochProgress(
-                        experiment_id=state.id,
-                        epoch=epoch,
-                        total_epochs=state.epochs,
-                        status=state.status,
-                        duration_seconds=epoch_duration,
-                        **metrics,
-                    )
-                    state.notify(progress)
-
-                    # Persist after every epoch
-                    _persist_experiment(state)
+                    # Notify on each epoch with real metrics
+                    for epoch_data in state.epoch_history:
+                        progress = EpochProgress(
+                            experiment_id=state.id,
+                            epoch=epoch_data.get("epoch", 0),
+                            total_epochs=state.epochs,
+                            status=state.status,
+                            loss=epoch_data.get("loss"),
+                            val_loss=epoch_data.get("val_loss"),
+                            accuracy=epoch_data.get("f1"),
+                            val_accuracy=epoch_data.get("val_f1"),
+                            iou=epoch_data.get("iou"),
+                            val_iou=epoch_data.get("val_iou"),
+                        )
+                        state.notify(progress)
 
                 state.status = TrainingStatus.COMPLETED
                 state.finished_at = _now_iso()
@@ -390,6 +357,7 @@ class TrainingService:
                 _persist_experiment(state)
 
             except Exception as exc:
+                logger.error(f"Training failed: {exc}", exc_info=True)
                 state.status = TrainingStatus.FAILED
                 state.error = str(exc)
                 state.finished_at = _now_iso()

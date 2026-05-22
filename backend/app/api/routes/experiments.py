@@ -11,6 +11,7 @@ from app.schemas.experiment import (
     ExperimentResponse,
     ExperimentUpdate,
 )
+from app.services.training_service import get_training_service
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
 
@@ -128,3 +129,140 @@ def delete_experiment(
     _check_ownership(experiment_id, current_user.id)
     _db().table("experiments").delete().eq("id", experiment_id).execute()
     return {"status": "deleted", "experiment_id": experiment_id}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Training Control Endpoints
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/{experiment_id}/train", response_model=ExperimentResponse)
+def start_training(
+    experiment_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+) -> ExperimentResponse:
+    """Start fine-tuning training for an experiment."""
+    exp = _check_ownership(experiment_id, current_user.id)
+
+    if exp["status"] not in ("pending", "paused"):
+        raise HTTPException(status_code=400, detail="Experiment is already running or finished.")
+
+    # Get training service and create experiment state
+    training_service = get_training_service()
+
+    # Load dataset images for training
+    db = _db()
+    images_res = db.table("images").select("id,storage_path").eq("dataset_id", exp["dataset_id"]).execute()
+
+    if not images_res.data:
+        raise HTTPException(status_code=400, detail="Dataset has no images.")
+
+    # Convert to PIL images (in real scenario, would load from storage)
+    images = []
+    # TODO: Actually download and convert images from storage_path
+
+    # Create experiment state and start training
+    state = training_service.create_experiment(
+        name=exp["name"],
+        dataset_id=exp["dataset_id"],
+        model_id=exp["model_id"],
+        epochs=exp["config"].get("epochs", 10),
+        images=images,
+        user_id=current_user.id,
+        architecture=exp["config"].get("architecture"),
+        encoder=exp["config"].get("encoder"),
+        hyperparameters=exp["config"],
+    )
+
+    # Update status in DB
+    db.table("experiments").update({"status": "running"}).eq("id", experiment_id).execute()
+
+    exp_updated = db.table("experiments").select("*").eq("id", experiment_id).limit(1).execute()
+    return ExperimentResponse(**exp_updated.data[0])
+
+
+@router.get("/{experiment_id}/progress")
+def get_training_progress(
+    experiment_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+) -> dict:
+    """Get current training progress."""
+    exp = _check_ownership(experiment_id, current_user.id)
+
+    training_service = get_training_service()
+    state = training_service.get(experiment_id)
+
+    if not state:
+        return {
+            "experiment_id": experiment_id,
+            "status": exp["status"],
+            "progress": 0,
+            "current_epoch": 0,
+            "total_epochs": exp["config"].get("epochs", 10),
+        }
+
+    return {
+        "experiment_id": experiment_id,
+        "status": state.status.value,
+        "progress": round(state.current_epoch / max(state.epochs, 1) * 100),
+        "current_epoch": state.current_epoch,
+        "total_epochs": state.epochs,
+        "best_loss": state.best_loss,
+        "best_iou": state.best_iou,
+        "best_accuracy": state.best_accuracy,
+        "last_epoch_history": state.epoch_history[-1] if state.epoch_history else None,
+    }
+
+
+@router.post("/{experiment_id}/pause")
+def pause_training(
+    experiment_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+) -> dict:
+    """Pause an ongoing training."""
+    _check_ownership(experiment_id, current_user.id)
+
+    training_service = get_training_service()
+    success = training_service.pause(experiment_id)
+
+    if not success:
+        raise HTTPException(status_code=400, detail="Experiment is not running.")
+
+    return {"status": "paused", "experiment_id": experiment_id}
+
+
+@router.post("/{experiment_id}/resume")
+def resume_training(
+    experiment_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+) -> dict:
+    """Resume a paused training."""
+    _check_ownership(experiment_id, current_user.id)
+
+    training_service = get_training_service()
+    success = training_service.resume(experiment_id)
+
+    if not success:
+        raise HTTPException(status_code=400, detail="Experiment is not paused.")
+
+    return {"status": "resumed", "experiment_id": experiment_id}
+
+
+@router.post("/{experiment_id}/stop")
+def stop_training(
+    experiment_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+) -> dict:
+    """Stop/cancel an ongoing training."""
+    exp = _check_ownership(experiment_id, current_user.id)
+
+    training_service = get_training_service()
+    success = training_service.cancel(experiment_id)
+
+    if not success:
+        raise HTTPException(status_code=400, detail="Experiment cannot be stopped at this stage.")
+
+    # Update DB
+    _db().table("experiments").update({"status": "cancelled"}).eq("id", experiment_id).execute()
+
+    return {"status": "stopped", "experiment_id": experiment_id}
