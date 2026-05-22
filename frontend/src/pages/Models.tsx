@@ -39,10 +39,33 @@ interface ApiError {
   detail?: string;
 }
 
+// Framework: determines how the model file is loaded
+const frameworkOptions = [
+  { label: "Keras / TensorFlow (.h5, .keras)", value: "keras"   },
+  { label: "PyTorch (.pth, .pt)",               value: "pytorch" },
+];
+
+// Architecture: informational only, does not affect loading
 const architectureOptions = [
-  { label: "Keras", value: "keras" },
-  { label: "Mask R-CNN", value: "mask_rcnn" },
-  { label: "PyTorch", value: "pytorch" },
+  { label: "UNet",          value: "unet"       },
+  { label: "UNet++",        value: "unetplusplus" },
+  { label: "DeepLab v3+",   value: "deeplabv3plus" },
+  { label: "FPN",           value: "fpn"        },
+  { label: "PSPNet",        value: "pspnet"     },
+  { label: "Mask R-CNN",    value: "mask_rcnn"  },
+  { label: "Other / Custom", value: "custom"   },
+];
+
+// Encoder: informational, stored in config
+const encoderOptions = [
+  { label: "EfficientNet-B0", value: "efficientnet-b0" },
+  { label: "EfficientNet-B4", value: "efficientnet-b4" },
+  { label: "EfficientNet-B5", value: "efficientnet-b5" },
+  { label: "ResNet-34",       value: "resnet34"        },
+  { label: "ResNet-50",       value: "resnet50"        },
+  { label: "ResNet-101",      value: "resnet101"       },
+  { label: "MobileNet-V2",    value: "mobilenet_v2"    },
+  { label: "Other / Custom",  value: "custom"          },
 ];
 
 const artifactTypeOptions = [
@@ -58,11 +81,6 @@ const sortOptions = [
 ];
 
 const defaultConfig = {
-  NAME: "graphene_mask_rcnn",
-  NUM_CLASSES: 3,
-  BACKBONE: "resnet101",
-  IMAGE_MIN_DIM: 1024,
-  IMAGE_MAX_DIM: 1024,
 };
 
 const textRender = (value: unknown) => (
@@ -87,10 +105,12 @@ export default function Models() {
   const [modelName, setModelName] = useState("");
   const [version, setVersion] = useState("1.0.0");
   const [description, setDescription] = useState("");
-  const [architecture, setArchitecture] = useState("keras");
+  const [framework,     setFramework]     = useState("keras");
+  const [architecture,  setArchitecture]  = useState("unet");
   const [artifactType, setArtifactType] = useState<ArtifactType>("full_model");
   const [classNames, setClassNames] = useState("background, few-layer, bulk");
-  const [encoder, setEncoder] = useState("");
+  const [encoder,     setEncoder]     = useState("efficientnet-b5");
+  const [inChannels,  setInChannels]  = useState("3");
   const [inputSize, setInputSize] = useState("224");
   const [configJson, setConfigJson] = useState(
     JSON.stringify(defaultConfig, null, 2),
@@ -160,7 +180,8 @@ export default function Models() {
     setModelName("");
     setVersion("1.0.0");
     setDescription("");
-    setArchitecture("keras");
+    setFramework("keras");
+    setArchitecture("unet");
     setArtifactType("full_model");
     setClassNames("background, few-layer, bulk");
     setEncoder("");
@@ -199,8 +220,8 @@ export default function Models() {
     }
 
     const parsedClasses = parseClasses();
-    if (artifactType === "weights" && (!architecture || parsedClasses.length === 0)) {
-      setUploadError("Weights require architecture and class names.");
+    if (artifactType === "weights" && parsedClasses.length === 0) {
+      setUploadError("Weights require at least one class name.");
       return;
     }
 
@@ -214,13 +235,14 @@ export default function Models() {
       formData.append("name", modelName.trim());
       formData.append("version", version.trim() || "1.0.0");
       formData.append("description", description.trim());
-      formData.append("framework", architecture === "pytorch" ? "pytorch" : "keras");
+      formData.append("framework", framework);
       formData.append("architecture", architecture);
       formData.append("artifact_type", artifactType);
       formData.append("classes", JSON.stringify(parsedClasses));
+      parsedConfig["in_channels"] = parseInt(inChannels) || 3;
+      if (inputSize.trim()) parsedConfig["input_size"] = parseInt(inputSize);
       formData.append("config", JSON.stringify(parsedConfig));
       if (encoder.trim()) formData.append("encoder", encoder.trim());
-      if (inputSize.trim()) formData.append("input_size", inputSize.trim());
 
       const token = localStorage.getItem("auth_token") ?? "";
       const response = await fetch(`${API_BASE_URL}/registry/models/upload`, {
@@ -540,20 +562,31 @@ export default function Models() {
               <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>
                 Encoder <span style={{ color: "var(--cl-font-secondary)", fontWeight: 400 }}>(optional)</span>
               </label>
-              <InputText
-                placeholder="e.g. resnet34, efficientnet-b0"
+              <SelectList
+                options={encoderOptions}
                 value={encoder}
-                onChange={(e) => setEncoder(e.target.value)}
+                onChange={setEncoder}
+                className="w-full"
               />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>
-                Input Size (px)
+                Input Size (px) <span style={{ color: "var(--cl-font-third)" }}>*</span>
               </label>
               <InputText
-                placeholder="224"
+                placeholder="512"
                 value={inputSize}
                 onChange={(e) => setInputSize(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>
+                Input Channels
+              </label>
+              <InputText
+                placeholder="3"
+                value={inChannels}
+                onChange={(e) => setInChannels(e.target.value)}
               />
             </div>
           </div>

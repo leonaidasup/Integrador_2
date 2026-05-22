@@ -21,6 +21,8 @@ dependencies = [
     "tensorflow",
     "tensorflow-intel",
     "torch",
+    "segmentation-models-pytorch",
+    "timm",
     "uvicorn[standard]",
     "websockets",
     "mlflow"

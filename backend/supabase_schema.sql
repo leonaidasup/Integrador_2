@@ -131,3 +131,4 @@ RETURNS void AS $$
   UPDATE public.datasets SET image_count = image_count + 1, updated_at = now()
   WHERE id = ds_id;
 $$ LANGUAGE sql;
+

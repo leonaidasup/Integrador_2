@@ -38,19 +38,63 @@ class ModelPredictError(RuntimeError):
     pass
 
 
-def _to_tensor(image: Image.Image, size: int) -> torch.Tensor:
-    """Convert PIL image to normalized tensor with shape [1, 3, H, W]."""
-    image_rgb = image.convert("RGB").resize((size, size), Image.BILINEAR)
-    arr = np.array(image_rgb, dtype=np.float32) / 255.0
+def _letterbox(image: Image.Image, size: int) -> tuple["Image.Image", tuple[int, int, int, int]]:
+    """
+    Replicate A.LongestMaxSize + A.PadIfNeeded:
+    - Scale so the longest side == size (preserve aspect ratio, CUBIC interpolation)
+    - Pad the shorter side with zeros to reach (size, size)
+    Returns the padded image and (pad_left, pad_top, pad_right, pad_bottom).
+    """
+    w, h = image.size
+    scale = size / max(w, h)
+    new_w = round(w * scale)
+    new_h = round(h * scale)
+    resized = image.resize((new_w, new_h), Image.BICUBIC)
+
+    pad_left  = (size - new_w) // 2
+    pad_top   = (size - new_h) // 2
+    pad_right  = size - new_w - pad_left
+    pad_bottom = size - new_h - pad_top
+
+    padded = Image.new("RGB", (size, size), (0, 0, 0))
+    padded.paste(resized, (pad_left, pad_top))
+    return padded, (pad_left, pad_top, pad_right, pad_bottom)
+
+
+def _remove_padding(
+    mask: np.ndarray,
+    padding: tuple[int, int, int, int],
+    original_size: tuple[int, int],
+) -> np.ndarray:
+    """
+    Crop the padding that was added during letterbox, then resize to original_size.
+    padding = (pad_left, pad_top, pad_right, pad_bottom)
+    original_size = (width, height)
+    """
+    pad_left, pad_top, pad_right, pad_bottom = padding
+    h, w = mask.shape
+    crop = mask[
+        pad_top  : h - pad_bottom if pad_bottom else h,
+        pad_left : w - pad_right  if pad_right  else w,
+    ]
+    return _resize_mask(crop, original_size)
+
+
+def _to_tensor(image: Image.Image, size: int) -> tuple[torch.Tensor, tuple[int, int, int, int]]:
+    """Convert PIL image to normalized tensor [1,3,H,W] using letterbox. Returns (tensor, padding)."""
+    image_rgb = image.convert("RGB")
+    padded, padding = _letterbox(image_rgb, size)
+    arr = np.array(padded, dtype=np.float32) / 255.0
     arr = np.transpose(arr, (2, 0, 1))
-    return torch.from_numpy(arr).unsqueeze(0)
+    return torch.from_numpy(arr).unsqueeze(0), padding
 
 
-def _to_numpy_batch(image: Image.Image, size: int) -> np.ndarray:
-    """Convert PIL image to normalized numpy batch with shape [1, H, W, 3]."""
-    image_rgb = image.convert("RGB").resize((size, size), Image.BILINEAR)
-    arr = np.array(image_rgb, dtype=np.float32) / 255.0
-    return np.expand_dims(arr, axis=0)
+def _to_numpy_batch(image: Image.Image, size: int) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Convert PIL image to normalized numpy batch [1,H,W,3] using letterbox. Returns (batch, padding)."""
+    image_rgb = image.convert("RGB")
+    padded, padding = _letterbox(image_rgb, size)
+    arr = np.array(padded, dtype=np.float32) / 255.0
+    return np.expand_dims(arr, axis=0), padding
 
 
 def _resize_mask(mask_small: np.ndarray, size: tuple[int, int]) -> np.ndarray:
@@ -85,7 +129,8 @@ class TorchModelAdapter(ModelAdapter):
     def predict(
         self, image: Image.Image, device: torch.device, preprocess: PreprocessConfig
     ) -> np.ndarray:
-        x = _to_tensor(image, preprocess.size).to(device)
+        x, padding = _to_tensor(image, preprocess.size)
+        x = x.to(device)
 
         with torch.no_grad():
             out = self._model(x)
@@ -102,7 +147,7 @@ class TorchModelAdapter(ModelAdapter):
         else:
             mask_small = torch.argmax(out, dim=1)[0].cpu().numpy().astype(np.uint8)
 
-        return _resize_mask(mask_small, image.size)
+        return _remove_padding(mask_small, padding, image.size)
 
 
 class KerasModelAdapter(ModelAdapter):
@@ -114,9 +159,7 @@ class KerasModelAdapter(ModelAdapter):
     def predict(
         self, image: Image.Image, device: torch.device, preprocess: PreprocessConfig
     ) -> np.ndarray:
-        batch = _to_numpy_batch(image, preprocess.size)
-        # Prefer predict() so outputs stay materialized as NumPy arrays even
-        # when TensorFlow eager execution has been disabled by other modules.
+        batch, padding = _to_numpy_batch(image, preprocess.size)
         pred_np = np.asarray(self._model.predict(batch, verbose=0))
 
         if pred_np.ndim != 4:
@@ -138,7 +181,7 @@ class KerasModelAdapter(ModelAdapter):
         else:
             mask_small = np.argmax(pred_np[0], axis=-1).astype(np.uint8)
 
-        return _resize_mask(mask_small, image.size)
+        return _remove_padding(mask_small, padding, image.size)
 
 
 class MaskRCNNModelAdapter(ModelAdapter):
@@ -178,6 +221,93 @@ def _load_pytorch_model(data: bytes, device: torch.device) -> TorchModelAdapter:
             "Failed to load .pth. Provide a TorchScript model saved with "
             "torch.jit.save()."
         ) from exc
+
+
+# ── Supported SMP architectures ──────────────────────────────────────────────
+_SMP_ARCHITECTURES: dict[str, str] = {
+    "unet":           "Unet",
+    "unetplusplus":   "UnetPlusPlus",
+    "unet++":         "UnetPlusPlus",
+    "fpn":            "FPN",
+    "deeplabv3plus":  "DeepLabV3Plus",
+    "deeplabv3":      "DeepLabV3",
+    "pspnet":         "PSPNet",
+    "pan":            "PAN",
+    "linknet":        "Linknet",
+    "manet":          "MAnet",
+}
+
+
+def _load_smp_state_dict(
+    data: bytes,
+    architecture: str,
+    encoder: str,
+    classes: int,
+    device: torch.device,
+    in_channels: int = 3,
+) -> TorchModelAdapter:
+    """Load a segmentation_models_pytorch model from a state_dict checkpoint."""
+    try:
+        import segmentation_models_pytorch as smp
+    except ImportError as exc:
+        raise ModelLoadError(
+            "segmentation-models-pytorch is not installed. "
+            "Run: pip install segmentation-models-pytorch"
+        ) from exc
+
+    arch_key = architecture.lower().replace("-", "").replace("_", "")
+    smp_class_name = _SMP_ARCHITECTURES.get(arch_key)
+    if not smp_class_name:
+        supported = ", ".join(_SMP_ARCHITECTURES.keys())
+        raise ModelLoadError(
+            f"Architecture '{architecture}' is not supported for state_dict loading. "
+            f"Supported: {supported}. "
+            "Export as TorchScript instead: torch.jit.save(torch.jit.script(model), path)"
+        )
+
+    try:
+        smp_class = getattr(smp, smp_class_name)
+        model = smp_class(
+            encoder_name=encoder,
+            encoder_weights=None,
+            in_channels=in_channels,
+            classes=classes,
+        )
+    except Exception as exc:
+        raise ModelLoadError(
+            f"Failed to instantiate {smp_class_name} with encoder '{encoder}' "
+            f"and {classes} classes: {exc}"
+        ) from exc
+
+    # Load checkpoint — supports both raw state_dict and wrapped {"model_state_dict": ...}
+    buffer = io.BytesIO(data)
+    try:
+        checkpoint = torch.load(buffer, map_location=device, weights_only=False)
+    except Exception as exc:
+        raise ModelLoadError(f"Failed to read .pt/.pth file: {exc}") from exc
+
+    if isinstance(checkpoint, dict):
+        state_dict = (
+            checkpoint.get("model_state_dict")
+            or checkpoint.get("state_dict")
+            or checkpoint.get("model")
+            or checkpoint  # raw state_dict
+        )
+    else:
+        raise ModelLoadError(
+            "Unexpected checkpoint format. Expected a dict with 'model_state_dict' or 'state_dict'."
+        )
+
+    try:
+        model.load_state_dict(state_dict, strict=True)
+    except RuntimeError as exc:
+        raise ModelLoadError(
+            f"State dict does not match the model architecture. "
+            f"Verify encoder, architecture and number of classes. Detail: {exc}"
+        ) from exc
+
+    model.to(device).eval()
+    return TorchModelAdapter(model)
 
 
 def _load_keras_model(data: bytes) -> KerasModelAdapter:
@@ -350,13 +480,54 @@ class ModelManager:
             if artifact_type == "weights":
                 if architecture == "mask_rcnn":
                     adapter = _load_mask_rcnn_weights(model_path, config, classes)
+                elif framework in {"keras", "tensorflow"} or model_path.suffix.lower() in {".h5", ".keras"}:
+                    adapter = _load_full_model_from_path(model_path, device, "keras")
+                    adapter.classes = classes
+                elif framework == "pytorch" or model_path.suffix.lower() in {".pth", ".pt"}:
+                    # Use SMP state_dict loader — requires architecture + encoder in metadata
+                    encoder_name = config.get("encoder", "resnet34")
+                    n_classes    = len(classes) if classes else 4
+                    in_channels  = int(config.get("in_channels", 3))
+                    adapter = _load_smp_state_dict(
+                        data=model_path.read_bytes(),
+                        architecture=architecture or "unet",
+                        encoder=encoder_name,
+                        classes=n_classes,
+                        device=device,
+                        in_channels=in_channels,
+                    )
+                    adapter.classes = classes
                 else:
                     raise ModelLoadError(
-                        f"Weights-only activation is not supported for architecture '{architecture}'."
+                        f"Weights-only loading not supported for architecture '{architecture}' "
+                        f"with framework '{framework}'. Upload as full_model instead."
                     )
             else:
-                adapter = _load_full_model_from_path(model_path, device, framework)
-                adapter.classes = classes
+                # Try TorchScript first; if it fails and we have SMP metadata, use SMP loader
+                try:
+                    adapter = _load_full_model_from_path(model_path, device, framework)
+                    adapter.classes = classes
+                except ModelLoadError as torchscript_err:
+                    encoder_name = config.get("encoder")
+                    if (
+                        framework == "pytorch"
+                        and architecture
+                        and architecture != "mask_rcnn"
+                        and encoder_name
+                    ):
+                        n_classes   = len(classes) if classes else 4
+                        in_channels = int(config.get("in_channels", 3))
+                        adapter = _load_smp_state_dict(
+                            data=model_path.read_bytes(),
+                            architecture=architecture,
+                            encoder=encoder_name,
+                            classes=n_classes,
+                            device=device,
+                            in_channels=in_channels,
+                        )
+                        adapter.classes = classes
+                    else:
+                        raise torchscript_err
         except ModelLoadError as exc:
             with self._lock:
                 self._last_error = str(exc)
@@ -365,7 +536,7 @@ class ModelManager:
         with self._lock:
             self._adapter = adapter
             self._framework = adapter.framework
-            self._preprocess = PreprocessConfig(size=int(config.get("input_size", self._preprocess.size)))
+            self._preprocess = PreprocessConfig(size=int(config.get("input_size", 512)))
             self._last_error = None
         return True
 

@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-import asyncio
-import io
-import json
-from typing import AsyncGenerator
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query
-from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
-from app.api.routes.auth import UserResponse, get_current_user, _decode_token, _get_user_by_id
+from app.api.routes.auth import UserResponse, get_current_user
 from app.core.supabase_client import get_supabase_client
-from app.services import storage
-from app.services.model_service import get_model_service
-from app.services.training_service import TrainingStatus, get_training_service
-
-from PIL import Image
+from app.schemas.experiment import (
+    ExperimentCreate,
+    ExperimentListResponse,
+    ExperimentResponse,
+    ExperimentUpdate,
+)
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
 
@@ -24,159 +19,112 @@ def _db():
     return get_supabase_client()
 
 
-def _get_user_from_token(token: str) -> UserResponse:
-    """Auth helper for SSE where headers can't be set by EventSource."""
-    payload = _decode_token(token)
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token.")
-    user = _get_user_by_id(str(user_id))
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found.")
-    return UserResponse(**user)
+def _now() -> str:
+    return datetime.utcnow().isoformat()
 
 
-# ── Create & start experiment ─────────────────────────────────────────────────
+def _check_ownership(exp_id: str, user_id: str) -> dict:
+    """Fetch experiment and verify it belongs to user via model ownership."""
+    res = _db().table("experiments").select("*").eq("id", exp_id).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Experiment not found.")
+    exp = res.data[0]
+    # verify via model ownership
+    model = _db().table("models").select("uploaded_by").eq("id", exp["model_id"]).limit(1).execute()
+    if not model.data or model.data[0]["uploaded_by"] != user_id:
+        raise HTTPException(status_code=403, detail="Not your experiment.")
+    return exp
 
-@router.post("", status_code=201)
+
+@router.post("", response_model=ExperimentResponse, status_code=201)
 def create_experiment(
-    name: str = Form(...),
-    dataset_id: str = Form(...),
-    model_id: str = Form(...),
-    epochs: int = Form(...),
+    payload: ExperimentCreate,
     current_user: UserResponse = Depends(get_current_user),
-) -> dict:
-    # Verify dataset ownership and get images
-    ds = _db().table("datasets").select("id,user_id").eq("id", dataset_id).limit(1).execute()
-    if not ds.data:
+) -> ExperimentResponse:
+    # Verify model belongs to user
+    model = _db().table("models").select("id,uploaded_by").eq("id", payload.model_id).limit(1).execute()
+    if not model.data:
+        raise HTTPException(status_code=404, detail="Model not found.")
+    if model.data[0]["uploaded_by"] != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your model.")
+
+    # Verify dataset belongs to user
+    dataset = _db().table("datasets").select("id,user_id").eq("id", payload.dataset_id).limit(1).execute()
+    if not dataset.data:
         raise HTTPException(status_code=404, detail="Dataset not found.")
-    if ds.data[0]["user_id"] != current_user.id:
+    if dataset.data[0]["user_id"] != current_user.id:
         raise HTTPException(status_code=403, detail="Not your dataset.")
 
-    # Load image records
-    img_records = _db().table("images").select("*").eq("dataset_id", dataset_id).execute()
-    images = []
-    for rec in (img_records.data or []):
-        try:
-            raw = storage.download_image(rec["storage_path"])
-            img = Image.open(io.BytesIO(raw)).convert("RGB")
-            images.append(img)
-        except Exception:
-            pass
-
-    if not images:
-        raise HTTPException(status_code=400, detail="Dataset has no images to train on.")
-
-    svc = get_training_service()
-    state = svc.create_experiment(
-        name=name,
-        dataset_id=dataset_id,
-        model_id=model_id,
-        epochs=epochs,
-        images=images,
-    )
-
-    return {
-        "id": state.id,
-        "name": state.name,
-        "dataset_id": state.dataset_id,
-        "model_id": state.model_id,
-        "epochs": state.epochs,
-        "status": state.status.value,
-        "current_epoch": state.current_epoch,
+    now = _now()
+    record = {
+        "name": payload.name.strip(),
+        "model_id": payload.model_id,
+        "dataset_id": payload.dataset_id,
+        "description": payload.description,
+        "config": payload.config or {},
+        "status": "pending",
+        "results": None,
+        "created_at": now,
+        "updated_at": now,
     }
+    res = _db().table("experiments").insert(record).execute()
+    if not res.data:
+        raise HTTPException(status_code=500, detail="Failed to create experiment.")
+    return ExperimentResponse(**res.data[0])
 
 
-# ── List experiments ──────────────────────────────────────────────────────────
+@router.get("", response_model=ExperimentListResponse)
+def list_experiments(
+    current_user: UserResponse = Depends(get_current_user),
+) -> ExperimentListResponse:
+    # Join via models to filter by owner
+    models_res = _db().table("models").select("id").eq("uploaded_by", current_user.id).execute()
+    model_ids = [m["id"] for m in (models_res.data or [])]
+    if not model_ids:
+        return ExperimentListResponse(experiments=[], total=0)
 
-@router.get("")
-def list_experiments(current_user: UserResponse = Depends(get_current_user)) -> list:
-    svc = get_training_service()
-    return [
-        {
-            "id": s.id,
-            "name": s.name,
-            "dataset_id": s.dataset_id,
-            "model_id": s.model_id,
-            "epochs": s.epochs,
-            "current_epoch": s.current_epoch,
-            "status": s.status.value,
-            "error": s.error,
-        }
-        for s in svc.list_all()
-    ]
+    res = _db().table("experiments").select("*").in_("model_id", model_ids).execute()
+    experiments = [ExperimentResponse(**e) for e in (res.data or [])]
+    return ExperimentListResponse(experiments=experiments, total=len(experiments))
 
 
-# ── SSE progress stream ───────────────────────────────────────────────────────
-
-@router.get("/{experiment_id}/stream")
-async def stream_progress(
+@router.get("/{experiment_id}", response_model=ExperimentResponse)
+def get_experiment(
     experiment_id: str,
-    token: str = Query(...),
-):
-    current_user = _get_user_from_token(token)
-    svc = get_training_service()
-    state = svc.get(experiment_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Experiment not found.")
-
-    async def event_generator() -> AsyncGenerator[str, None]:
-        loop = asyncio.get_event_loop()
-        queue: asyncio.Queue = asyncio.Queue()
-
-        def on_progress(progress):
-            loop.call_soon_threadsafe(queue.put_nowait, progress)
-
-        state.subscribe(on_progress)
-
-        # Send current state immediately
-        from app.services.training_service import EpochProgress
-        yield f"data: {json.dumps(EpochProgress(experiment_id=state.id, epoch=state.current_epoch, total_epochs=state.epochs, status=state.status).as_dict())}\n\n"
-
-        try:
-            terminal = {TrainingStatus.COMPLETED, TrainingStatus.FAILED, TrainingStatus.CANCELLED}
-            while True:
-                try:
-                    progress = await asyncio.wait_for(queue.get(), timeout=30.0)
-                    yield f"data: {json.dumps(progress.as_dict())}\n\n"
-                    if progress.status in terminal:
-                        break
-                except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
-        finally:
-            state.unsubscribe(on_progress)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    current_user: UserResponse = Depends(get_current_user),
+) -> ExperimentResponse:
+    exp = _check_ownership(experiment_id, current_user.id)
+    return ExperimentResponse(**exp)
 
 
-# ── Pause / Resume / Cancel ───────────────────────────────────────────────────
+@router.patch("/{experiment_id}", response_model=ExperimentResponse)
+def update_experiment(
+    experiment_id: str,
+    payload: ExperimentUpdate,
+    current_user: UserResponse = Depends(get_current_user),
+) -> ExperimentResponse:
+    _check_ownership(experiment_id, current_user.id)
 
-@router.post("/{experiment_id}/pause")
-def pause_experiment(experiment_id: str, current_user: UserResponse = Depends(get_current_user)) -> dict:
-    svc = get_training_service()
-    if not svc.pause(experiment_id):
-        raise HTTPException(status_code=400, detail="Cannot pause experiment.")
-    return {"status": "paused"}
+    updates: dict = {"updated_at": _now()}
+    if payload.status is not None:
+        allowed = {"pending", "running", "completed", "failed", "paused"}
+        if payload.status not in allowed:
+            raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {allowed}")
+        updates["status"] = payload.status
+    if payload.results is not None:
+        updates["results"] = payload.results
+
+    res = _db().table("experiments").update(updates).eq("id", experiment_id).execute()
+    if not res.data:
+        raise HTTPException(status_code=500, detail="Failed to update experiment.")
+    return ExperimentResponse(**res.data[0])
 
 
-@router.post("/{experiment_id}/resume")
-def resume_experiment(experiment_id: str, current_user: UserResponse = Depends(get_current_user)) -> dict:
-    svc = get_training_service()
-    if not svc.resume(experiment_id):
-        raise HTTPException(status_code=400, detail="Cannot resume experiment.")
-    return {"status": "running"}
-
-
-@router.post("/{experiment_id}/cancel")
-def cancel_experiment(experiment_id: str, current_user: UserResponse = Depends(get_current_user)) -> dict:
-    svc = get_training_service()
-    if not svc.cancel(experiment_id):
-        raise HTTPException(status_code=400, detail="Cannot cancel experiment.")
-    return {"status": "cancelled"}
+@router.delete("/{experiment_id}")
+def delete_experiment(
+    experiment_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+) -> dict:
+    _check_ownership(experiment_id, current_user.id)
+    _db().table("experiments").delete().eq("id", experiment_id).execute()
+    return {"status": "deleted", "experiment_id": experiment_id}
