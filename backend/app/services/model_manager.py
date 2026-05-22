@@ -269,7 +269,7 @@ def _load_smp_state_dict(
         smp_class = getattr(smp, smp_class_name)
         model = smp_class(
             encoder_name=encoder,
-            encoder_weights=None,
+            encoder_weights="imagenet",
             in_channels=in_channels,
             classes=classes,
         )

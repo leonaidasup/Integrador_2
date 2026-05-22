@@ -7,42 +7,22 @@ import { InputText } from "../components/InputText";
 import { Table } from "../components/Table";
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
-  running: { bg: "var(--bg-blue)", color: "var(--cl-blue)" },
-  complete: { bg: "var(--bg-green)", color: "var(--cl-green)" },
-  pause: { bg: "var(--bg-yellow)", color: "var(--cl-yellow)" },
+  active: { bg: "var(--bg-green)", color: "var(--cl-green)" },
+  inactive: { bg: "var(--bg-yellow)", color: "var(--cl-yellow)" },
   failed: { bg: "var(--bg-red)", color: "var(--cl-red)" },
 };
 
-const data = [
-  {
-    model: "CellSegNet v2.3",
-    version: "v2.3",
-    architecture: "U-Net",
-    description: "Cell segmentation model",
-    status: "complete",
-  },
-  {
-    model: "BioVision UNet",
-    version: "v1.8",
-    architecture: "U-Net",
-    description: "Training model",
-    status: "running",
-  },
-  {
-    model: "DeepCell-X",
-    version: "v4.0",
-    architecture: "ResNet",
-    description: "Paused experiment",
-    status: "pause",
-  },
-  {
-    model: "NanoSeg AI",
-    version: "v0.9",
-    architecture: "EfficientNet",
-    description: "Failed training",
-    status: "failed",
-  },
-];
+type Model = {
+  id: string;
+  name: string;
+  version: string;
+  architecture: string | null;
+  description: string | null;
+  active: boolean;
+  framework: string;
+  artifact_type: string;
+  classes: string[];
+};
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
@@ -72,7 +52,11 @@ type SegmentResult = {
 
 export default function Dashboard() {
   const [modelModalOpen, setModelModalOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<any>(null);
+  const [selectedModel, setSelectedModel] = useState<Model | null>(null);
+  const [allModels, setAllModels] = useState<Model[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [activatingModel, setActivatingModel] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
@@ -82,6 +66,84 @@ export default function Dashboard() {
   const [segmentError, setSegmentError] = useState<string | null>(null);
   const [segmenting, setSegmenting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    fetchAvailableModels();
+  }, []);
+
+  const fetchAvailableModels = async () => {
+    setLoadingModels(true);
+    setModelsError(null);
+    try {
+      const token = localStorage.getItem("auth_token") ?? "";
+      const response = await fetch(`${API_BASE_URL}/registry/models`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch models");
+      }
+
+      const data = await response.json();
+      setAllModels(data.models || []);
+      
+      // Set active model as selected by default
+      const activeModel = data.models?.find((m: Model) => m.active);
+      if (activeModel) {
+        setSelectedModel(activeModel);
+      }
+    } catch (error) {
+      setModelsError(
+        error instanceof Error ? error.message : "Failed to load models",
+      );
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const handleActivateModel = async (modelId: string) => {
+    setActivatingModel(modelId);
+    try {
+      const token = localStorage.getItem("auth_token") ?? "";
+      const response = await fetch(
+        `${API_BASE_URL}/registry/models/${modelId}/activate`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to activate model");
+      }
+
+      const activatedModel = await response.json();
+      
+      // Update local state
+      setAllModels((prevModels) =>
+        prevModels.map((m) => ({
+          ...m,
+          active: m.id === modelId,
+        })),
+      );
+      
+      setSelectedModel(activatedModel);
+      setModelModalOpen(false);
+    } catch (error) {
+      setModelsError(
+        error instanceof Error ? error.message : "Failed to activate model",
+      );
+    } finally {
+      setActivatingModel(null);
+    }
+  };
 
   useEffect(() => {
     if (!imageFile) {
@@ -109,11 +171,15 @@ export default function Dashboard() {
     setSegmentError(null);
 
     try {
+      const token = localStorage.getItem("auth_token") ?? "";
       const formData = new FormData();
       formData.append("file", imageFile);
 
       const response = await fetch(`${API_BASE_URL}/segment`, {
         method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+        },
         body: formData,
       });
 
@@ -147,46 +213,48 @@ export default function Dashboard() {
       }))
     : [];
 
-  const filteredData = data.filter((row) => {
+  const filteredData = allModels.filter((row) => {
     if (!search) return true;
     const q = search.toLowerCase();
     return (
-      row.model.toLowerCase().includes(q) ||
+      row.name.toLowerCase().includes(q) ||
       row.version.toLowerCase().includes(q) ||
-      row.architecture.toLowerCase().includes(q) ||
-      row.description.toLowerCase().includes(q)
+      (row.architecture?.toLowerCase().includes(q) ?? false) ||
+      (row.description?.toLowerCase().includes(q) ?? false)
     );
   });
 
   const columns = [
-    { key: "model", label: "Model" },
+    { key: "name", label: "Model" },
     { key: "version", label: "Version" },
     { key: "architecture", label: "Architecture" },
     {
-      key: "status",
+      key: "active",
       label: "Status",
-      render: (value: string) => (
+      render: (value: boolean) => (
         <span
           className="text-xs px-2 py-1 rounded-md"
           style={{
-            background: statusStyles[value].bg,
-            color: statusStyles[value].color,
+            background: statusStyles[value ? "active" : "inactive"].bg,
+            color: statusStyles[value ? "active" : "inactive"].color,
           }}
         >
-          {value}
+          {value ? "active" : "inactive"}
         </span>
       ),
     },
     {
       key: "select",
       label: "",
-      render: (_: any, row: any) => (
+      render: (_: any, row: Model) => (
         <Button
-          label="Select"
+          label={row.active ? "Active" : "Activate"}
           className="sm"
+          disabled={activatingModel === row.id || row.active}
           onClick={() => {
-            setSelectedModel(row);
-            setModelModalOpen(false);
+            if (!row.active) {
+              handleActivateModel(row.id);
+            }
           }}
         />
       ),
@@ -340,24 +408,24 @@ export default function Dashboard() {
                       className="text-sm font-semibold"
                       style={{ color: "var(--cl-font-primary)" }}
                     >
-                      {selectedModel.model}
+                      {selectedModel.name}
                     </span>
                     <span
                       className="text-xs"
                       style={{ color: "var(--cl-font-secondary)" }}
                     >
-                      {selectedModel.version} • {selectedModel.architecture}
+                      {selectedModel.version} • {selectedModel.architecture || "Unknown"}
                     </span>
                   </div>
 
                   <span
                     className="text-xs px-2 py-1 rounded-md"
                     style={{
-                      background: statusStyles[selectedModel.status].bg,
-                      color: statusStyles[selectedModel.status].color,
+                      background: statusStyles[selectedModel.active ? "active" : "inactive"].bg,
+                      color: statusStyles[selectedModel.active ? "active" : "inactive"].color,
                     }}
                   >
-                    {selectedModel.status}
+                    {selectedModel.active ? "active" : "inactive"}
                   </span>
                 </>
               ) : (
@@ -544,7 +612,45 @@ export default function Dashboard() {
             onChange={(e) => setSearch(e.target.value)}
           />
 
-          <Table columns={columns} data={filteredData} />
+          {loadingModels && (
+            <div
+              className="flex items-center gap-3 rounded-lg px-4 py-3"
+              style={{
+                background: "var(--bg-blue)",
+                border: "1px solid var(--cl-blue)",
+              }}
+            >
+              <span className="relative flex h-4 w-4">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--cl-blue)] opacity-60" />
+                <span className="relative inline-flex h-4 w-4 rounded-full bg-[var(--cl-blue)]" />
+              </span>
+              <span
+                className="text-sm"
+                style={{ color: "var(--cl-blue)" }}
+              >
+                Loading models...
+              </span>
+            </div>
+          )}
+
+          {modelsError && !loadingModels && (
+            <p className="text-xs" style={{ color: "var(--cl-red)" }}>
+              {modelsError}
+            </p>
+          )}
+
+          {allModels.length === 0 && !loadingModels && (
+            <p
+              className="text-xs text-center py-4"
+              style={{ color: "var(--cl-font-secondary)" }}
+            >
+              No models available. Upload one from the Models section.
+            </p>
+          )}
+
+          {allModels.length > 0 && (
+            <Table columns={columns} data={filteredData} />
+          )}
         </div>
       </Modal>
     </main>

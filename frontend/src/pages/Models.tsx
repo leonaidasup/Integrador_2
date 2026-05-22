@@ -123,6 +123,14 @@ export default function Models() {
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const detectFrameworkFromFile = (file: File): string => {
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if ([".pth", ".pt"].includes(`.${extension}`)) {
+      return "pytorch";
+    }
+    return "keras";
+  };
+
   const loadModels = async () => {
     setLoadingModels(true);
     setRegistryError(null);
@@ -495,7 +503,14 @@ export default function Models() {
             type="file"
             accept=".h5,.keras,.pth,.pt,.pkl,.joblib"
             className="hidden"
-            onChange={(event) => setModelFile(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              setModelFile(file);
+              if (file) {
+                const detectedFramework = detectFrameworkFromFile(file);
+                setFramework(detectedFramework);
+              }
+            }}
           />
 
           <div className="grid grid-cols-2 gap-3">
@@ -533,6 +548,20 @@ export default function Models() {
                 className="w-full"
               />
             </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>
+                Framework
+              </label>
+              <SelectList
+                options={frameworkOptions}
+                value={framework}
+                onChange={setFramework}
+                className="w-full"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>
                 Artifact Type
