@@ -38,7 +38,7 @@ const statusStyles: Record<string, { bg: string; color: string }> = {
   pending:   { bg: "var(--bg-yellow)", color: "var(--cl-yellow)" },
 };
 
-const batchOptions = ["16", "32", "64", "128"].map(v => ({ label: v, value: v }));
+const batchOptions = ["4", "16", "32", "64", "128"].map(v => ({ label: v, value: v }));
 const lossOptions  = ["CrossEntropy", "MSE", "BCE", "Focal"].map(v => ({ label: v, value: v.toLowerCase() }));
 const sortOptions  = [
   { label: "All",    value: "all"    },

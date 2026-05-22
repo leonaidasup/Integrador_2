@@ -89,6 +89,16 @@ export default function Datasets() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // COCO Import modal
+  const [cocoModalOpen, setCocoModalOpen] = useState(false);
+  const [cocoName, setCocoName] = useState("");
+  const [cocoDescription, setCocoDescription] = useState("");
+  const [cocoVersion, setCocoVersion] = useState("1.0.0");
+  const [cocoFile, setCocoFile] = useState<File | null>(null);
+  const [importingCoco, setImportingCoco] = useState(false);
+  const [cocoError, setCocoError] = useState<string | null>(null);
+  const cocoFileRef = useRef<HTMLInputElement | null>(null);
+
   // Images modal
   const [imagesModalOpen, setImagesModalOpen] = useState(false);
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
@@ -186,6 +196,43 @@ export default function Datasets() {
   const resetUploadForm = () => {
     setDsName(""); setDsDescription(""); setDsTags(""); setDsVersion("1.0.0");
     setDsFiles([]); setUploadError(null);
+  };
+
+  const resetCocoForm = () => {
+    setCocoName(""); setCocoDescription(""); setCocoVersion("1.0.0");
+    setCocoFile(null); setCocoError(null);
+  };
+
+  const handleImportCoco = async () => {
+    if (!cocoName.trim()) { setCocoError("Dataset name is required."); return; }
+    if (!cocoFile) { setCocoError("Please select a ZIP file with COCO format."); return; }
+    
+    setImportingCoco(true);
+    setCocoError(null);
+    try {
+      const form = new FormData();
+      form.append("name", cocoName.trim());
+      form.append("description", cocoDescription.trim() || "");
+      form.append("version", cocoVersion.trim() || "1.0.0");
+      form.append("file", cocoFile);
+      
+      const res = await fetch(`${API_BASE_URL}/datasets/import/coco`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: form,
+      });
+      const payload = (await res.json()) as Dataset & { detail?: string };
+      
+      if (!res.ok) { setCocoError(payload.detail ?? "Import failed."); return; }
+      
+      await loadDatasets();
+      resetCocoForm();
+      setCocoModalOpen(false);
+    } catch {
+      setCocoError("Could not reach backend.");
+    } finally {
+      setImportingCoco(false);
+    }
   };
 
   // ── Add image to existing dataset ──────────────────────────────────────────
@@ -352,7 +399,10 @@ export default function Datasets() {
           <h1 className="text-2xl text-[var(--cl-font-primary)] font-semibold">Datasets</h1>
           <p className="text-sm text-[var(--cl-font-secondary)]">Manage your microscopy image collections</p>
         </div>
-        <Button label="Upload Dataset" className="h-min" ico={<SvgIcon name="upload" />} onClick={() => setUploadModalOpen(true)} />
+        <div className="flex flex-row gap-2 h-min">
+          <Button label="Import COCO" className="h-min" ico={<SvgIcon name="upload" />} onClick={() => setCocoModalOpen(true)} />
+          {/* <Button label="Upload Dataset" className="h-min" ico={<SvgIcon name="upload" />} onClick={() => setUploadModalOpen(true)} /> */}
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -515,6 +565,60 @@ export default function Datasets() {
           <div className="flex flex-row justify-end gap-2">
             <Button label="Cancel" variant="secondary" onClick={() => { setDeleteModalOpen(false); setDatasetToDelete(null); }} />
             <Button label={deleting ? "Deleting..." : "Delete"} disabled={deleting} onClick={() => void handleDeleteDataset()} />
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── COCO Import Modal ── */}
+      <Modal open={cocoModalOpen} onClose={() => { setCocoModalOpen(false); resetCocoForm(); }}
+        title="Import COCO Dataset" description="Import a ZIP with train/test/valid folder structure" icon="box">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>Dataset Name</label>
+            <InputText placeholder="e.g. Graphene Dataset" value={cocoName} onChange={(e) => setCocoName(e.target.value)} />
+          </div>
+          
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>Description (optional)</label>
+            <InputText placeholder="What this dataset contains..." value={cocoDescription} onChange={(e) => setCocoDescription(e.target.value)} />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>Version</label>
+            <InputText placeholder="1.0.0" value={cocoVersion} onChange={(e) => setCocoVersion(e.target.value)} />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>ZIP File</label>
+            <input ref={cocoFileRef} type="file" accept=".zip" className="hidden"
+              onChange={(e) => setCocoFile(e.target.files?.[0] ?? null)} />
+            <div
+              className="flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 cursor-pointer"
+              style={{ borderColor: "var(--cl-border)" }}
+              onClick={() => cocoFileRef.current?.click()}
+            >
+              <SvgIcon name="upload" className="text-[var(--cl-font-secondary)]" size="w-8 h-8" />
+              <p className="text-sm font-medium" style={{ color: "var(--cl-font-primary)" }}>
+                Drop ZIP or click to browse
+              </p>
+              <p className="text-xs text-center" style={{ color: "var(--cl-font-secondary)" }}>
+                Expected structure: train/, test/, valid/ folders with images and .coco annotation files
+              </p>
+            </div>
+            {cocoFile && (
+              <p className="text-xs" style={{ color: "var(--cl-font-secondary)" }}>
+                Selected: {cocoFile.name}
+              </p>
+            )}
+          </div>
+
+          {cocoError && <p className="text-xs" style={{ color: "var(--cl-red)" }}>{cocoError}</p>}
+
+          <div className="flex flex-row justify-end gap-2">
+            <Button label="Cancel" variant="secondary" onClick={() => { setCocoModalOpen(false); resetCocoForm(); }} />
+            <Button label={importingCoco ? "Importing..." : "Import Dataset"} 
+              disabled={!cocoName.trim() || !cocoFile || importingCoco}
+              onClick={() => void handleImportCoco()} />
           </div>
         </div>
       </Modal>

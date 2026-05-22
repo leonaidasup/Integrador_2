@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import json
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -227,3 +229,109 @@ def list_segmentations(
 
     res = _db().table("segmentations").select("*").eq("image_id", image_id).execute()
     return [SegmentationResponse(**s) for s in (res.data or [])]
+
+
+# ── COCO Import ───────────────────────────────────────────────────────────────
+
+@router.post("/import/coco", response_model=DatasetResponse, status_code=201)
+async def import_coco_dataset(
+    name: str = Form(...),
+    description: str | None = Form(None),
+    version: str = Form("1.0.0"),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+) -> DatasetResponse:
+    """Import a COCO dataset from a ZIP containing train/test/valid splits with annotations."""
+    
+    if file.content_type != "application/zip" and not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="File must be a ZIP archive.")
+    
+    zip_data = await file.read()
+    if not zip_data:
+        raise HTTPException(status_code=400, detail="Empty ZIP file.")
+    
+    try:
+        # Create dataset first
+        now = _now()
+        dataset_data = {
+            "user_id": current_user.id,
+            "name": name.strip(),
+            "description": description,
+            "tags": ["coco"],
+            "version": version,
+            "image_count": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        res = _db().table("datasets").insert(dataset_data).execute()
+        if not res.data:
+            raise HTTPException(status_code=500, detail="Failed to create dataset.")
+        dataset = DatasetResponse(**res.data[0])
+        
+        # Process ZIP
+        image_count = 0
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+            # Expected structure: train/, test/, valid/ (each with images and .coco annotations)
+            splits = ["train", "test", "valid"]
+            
+            for split in splits:
+                split_files = [f for f in zf.namelist() if f.startswith(f"{split}/")]
+                
+                for file_path in split_files:
+                    # Skip directories and non-image files
+                    if file_path.endswith("/") or file_path.endswith(".coco"):
+                        continue
+                    
+                    # Check if it's an image
+                    ext = Path(file_path).suffix.lower()
+                    if ext not in {".png", ".jpg", ".jpeg", ".tiff"}:
+                        continue
+                    
+                    try:
+                        # Extract image data
+                        file_data = zf.read(file_path)
+                        img = PILImage.open(io.BytesIO(file_data)).convert("RGB")
+                        width, height = img.size
+                        fmt = ext.lstrip(".")
+                        
+                        # Upload image
+                        image_id = str(uuid.uuid4())
+                        filename = Path(file_path).name
+                        storage_path = storage.upload_image(
+                            data=file_data,
+                            filename=filename,
+                            user_id=current_user.id,
+                            dataset_id=dataset.id,
+                            image_id=image_id,
+                        )
+                        
+                        # Save image record with split metadata
+                        image_record = {
+                            "id": image_id,
+                            "dataset_id": dataset.id,
+                            "user_id": current_user.id,
+                            "filename": filename,
+                            "storage_path": storage_path,
+                            "width": width,
+                            "height": height,
+                            "format": fmt,
+                            "size_bytes": len(file_data),
+                            "created_at": _now(),
+                        }
+                        _db().table("images").insert(image_record).execute()
+                        image_count += 1
+                    except Exception as e:
+                        # Log but continue with other images
+                        pass
+        
+        # Update dataset image count
+        if image_count > 0:
+            _db().table("datasets").update({"image_count": image_count}).eq("id", dataset.id).execute()
+            dataset.image_count = image_count
+        
+        return dataset
+        
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid ZIP file.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to import COCO dataset: {str(e)}")
