@@ -85,3 +85,49 @@ CREATE INDEX IF NOT EXISTS idx_users_email            ON public.users(email);
 CREATE INDEX IF NOT EXISTS idx_models_active          ON public.models(active);
 CREATE INDEX IF NOT EXISTS idx_experiments_model_id   ON public.experiments(model_id);
 CREATE INDEX IF NOT EXISTS idx_experiments_dataset_id ON public.experiments(dataset_id);
+
+-- Un dataset es una colección de imágenes, propiedad de un usuario
+CREATE TABLE public.datasets (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID        NOT NULL,   -- dueño
+    name        TEXT        NOT NULL,
+    description TEXT,
+    tags        TEXT[]      NOT NULL DEFAULT '{}',
+    image_count INTEGER     NOT NULL DEFAULT 0,
+    version     TEXT        NOT NULL DEFAULT '1.0.0',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Cada imagen dentro de un dataset
+CREATE TABLE public.images (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    dataset_id   UUID        NOT NULL REFERENCES public.datasets(id) ON DELETE CASCADE,
+    filename     TEXT        NOT NULL,
+    storage_path TEXT        NOT NULL,   -- ruta en Supabase Storage
+    width        INTEGER,
+    height       INTEGER,
+    format       TEXT,                   -- 'png' | 'tiff' | 'jpeg'
+    size_bytes   INTEGER,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Cada segmentación: imagen + modelo + resultado
+CREATE TABLE public.segmentations (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    image_id        UUID        NOT NULL REFERENCES public.images(id) ON DELETE CASCADE,
+    model_id        UUID        NOT NULL REFERENCES public.models(id),
+    user_id         UUID        NOT NULL,
+    -- rutas en Storage
+    mask_path       TEXT        NOT NULL,   -- PNG de clase por pixel (uint8)
+    overlay_path    TEXT,                   -- PNG overlay opcional
+    -- metadata de resultado
+    classes_present TEXT[]      NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION increment_image_count(ds_id UUID)
+RETURNS void AS $$
+  UPDATE public.datasets SET image_count = image_count + 1, updated_at = now()
+  WHERE id = ds_id;
+$$ LANGUAGE sql;
