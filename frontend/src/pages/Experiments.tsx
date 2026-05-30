@@ -14,6 +14,16 @@ function authHeaders() {
   return { Authorization: `Bearer ${localStorage.getItem("auth_token") ?? ""}` };
 }
 
+async function readJson<T>(res: Response): Promise<T & { detail?: string }> {
+  const text = await res.text();
+  if (!text) return {} as T & { detail?: string };
+  try {
+    return JSON.parse(text) as T & { detail?: string };
+  } catch {
+    return { detail: text } as T & { detail?: string };
+  }
+}
+
 interface Experiment {
   id: string;
   name: string;
@@ -22,13 +32,16 @@ interface Experiment {
   description?: string | null;
   config?: Record<string, unknown> | null;
   status: string;
-  results?: unknown;
+  results?: {
+    trainings?: TrainingRun[];
+  } | null;
   created_at: string;
   updated_at: string;
 }
 
 interface Model   { id: string; name: string; version: string; }
 interface Dataset { id: string; name: string; }
+interface TrainingRun { id: string; iou: number; dice: number; loss: number; status: string; }
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
   running:   { bg: "var(--bg-blue)",   color: "var(--cl-blue)"   },
@@ -39,7 +52,8 @@ const statusStyles: Record<string, { bg: string; color: string }> = {
 };
 
 const batchOptions = ["4", "16", "32", "64", "128"].map(v => ({ label: v, value: v }));
-const lossOptions  = ["CrossEntropy", "MSE", "BCE", "Focal"].map(v => ({ label: v, value: v.toLowerCase() }));
+const epochOptions = ["4", "8", "12", "20", "30"].map(v => ({ label: v, value: v }));
+const lossOptions  = ["CrossEntropy", "Dice", "Focal", "BCE", "MSE"].map(v => ({ label: v, value: v.toLowerCase() }));
 const sortOptions  = [
   { label: "All",    value: "all"    },
   { label: "Name",   value: "name"   },
@@ -61,6 +75,7 @@ export default function Experiments() {
   const [expModel,   setExpModel]   = useState("");
   const [expDataset, setExpDataset] = useState("");
   const [expBatch,   setExpBatch]   = useState("32");
+  const [expEpochs,  setExpEpochs]  = useState("8");
   const [expLoss,    setExpLoss]    = useState("crossentropy");
   const [createError,  setCreateError]  = useState<string | null>(null);
   const [creating,     setCreating]     = useState(false);
@@ -73,22 +88,35 @@ export default function Experiments() {
   const [search, setSearch] = useState("");
   const [sort,   setSort]   = useState("all");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [trainingId, setTrainingId] = useState<string | null>(null);
+  const [trainError, setTrainError] = useState<string | null>(null);
 
   // ── Load data ──────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
+      if (!localStorage.getItem("auth_token")) {
+        setError("Your session token is missing. Please log in again.");
+        return;
+      }
       const [expRes, modRes, dsRes] = await Promise.all([
         fetch(`${API_BASE_URL}/experiments`,        { headers: authHeaders() }),
         fetch(`${API_BASE_URL}/registry/models`,    { headers: authHeaders() }),
         fetch(`${API_BASE_URL}/datasets`,           { headers: authHeaders() }),
       ]);
-      const [expData, modData, dsData] = await Promise.all([expRes.json(), modRes.json(), dsRes.json()]);
+      const [expData, modData, dsData] = await Promise.all([
+        readJson<{ experiments?: Experiment[] }>(expRes),
+        readJson<{ models?: Model[] }>(modRes),
+        readJson<{ datasets?: Dataset[] }>(dsRes),
+      ]);
       if (!expRes.ok) { setError(expData.detail ?? "Failed to load experiments."); return; }
+      if (!modRes.ok) { setError(modData.detail ?? "Failed to load models."); return; }
+      if (!dsRes.ok)  { setError(dsData.detail ?? "Failed to load datasets."); return; }
       setExperiments(expData.experiments ?? []);
       setModels(modData.models ?? []);
       setDatasets(dsData.datasets ?? []);
-    } catch {
+    } catch (err) {
+      console.error(err);
       setError("Could not reach backend.");
     } finally {
       setLoading(false);
@@ -112,7 +140,7 @@ export default function Experiments() {
           description: expDesc.trim() || null,
           model_id: expModel,
           dataset_id: expDataset,
-          config: { batch_size: parseInt(expBatch), loss: expLoss },
+          config: { batch_size: parseInt(expBatch), epochs: parseInt(expEpochs), loss: expLoss },
         }),
       });
       const data = await res.json();
@@ -120,6 +148,7 @@ export default function Experiments() {
       await load();
       setCreateOpen(false);
       setExpName(""); setExpDesc(""); setExpModel(""); setExpDataset("");
+      setExpBatch("32"); setExpEpochs("8"); setExpLoss("crossentropy");
     } catch {
       setCreateError("Could not reach backend.");
     } finally {
@@ -139,6 +168,24 @@ export default function Experiments() {
       await load();
       setEditOpen(false);
     } catch { /* silent */ }
+  };
+
+  const handleTrain = async (id: string) => {
+    setTrainingId(id);
+    setTrainError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/experiments/${id}/train`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const payload = await res.json();
+      if (!res.ok) { setTrainError(payload.detail ?? "Training failed."); return; }
+      await load();
+    } catch {
+      setTrainError("Could not reach backend.");
+    } finally {
+      setTrainingId(null);
+    }
   };
 
   // ── Delete ─────────────────────────────────────────────────────────
@@ -178,16 +225,35 @@ export default function Experiments() {
   const modelOptions   = models.map(m   => ({ label: `${m.name} v${m.version}`, value: m.id }));
   const datasetOptions = datasets.map(d => ({ label: d.name,                    value: d.id }));
   const statusOptions  = ["pending","running","completed","failed","paused"].map(s => ({ label: s, value: s }));
+  const latestTraining = (exp: Experiment) => exp.results?.trainings?.[0] ?? null;
 
   const columns = [
     { key: "name",       label: "Experiment", render: (v: unknown) => <span className="font-medium">{String(v)}</span> },
     { key: "dataset_id", label: "Dataset",    render: (v: unknown) => <span className="font-medium">{datasetName(String(v))}</span> },
     { key: "model_id",   label: "Model",      render: (v: unknown) => <span className="font-medium">{modelName(String(v))}</span> },
     {
-      key: "config", label: "Batch",
-      render: (v: unknown) => {
-        const cfg = v as Record<string, unknown> | null;
+      key: "batch_size", label: "Batch",
+      render: (_: unknown, row: Record<string, unknown>) => {
+        const cfg = (row as unknown as Experiment).config;
         return <span className="font-medium">{String(cfg?.batch_size ?? "-")}</span>;
+      },
+    },
+    {
+      key: "loss", label: "Loss",
+      render: (_: unknown, row: Record<string, unknown>) => {
+        const cfg = (row as unknown as Experiment).config;
+        return <span className="font-medium capitalize">{String(cfg?.loss ?? "-")}</span>;
+      },
+    },
+    {
+      key: "results", label: "Metrics",
+      render: (_: unknown, row: Record<string, unknown>) => {
+        const run = latestTraining(row as unknown as Experiment);
+        return (
+          <span className="font-medium">
+            {run ? `IoU ${run.iou} / Dice ${run.dice} / Loss ${run.loss}` : "-"}
+          </span>
+        );
       },
     },
     {
@@ -205,6 +271,13 @@ export default function Experiments() {
         const exp = row as unknown as Experiment;
         return (
           <div className="flex flex-row gap-2 justify-end">
+            <Button
+              variant="secondary"
+              label={trainingId === exp.id ? "Training" : "Train"}
+              ico={<SvgIcon name="play" />}
+              disabled={trainingId === exp.id}
+              onClick={() => void handleTrain(exp.id)}
+            />
             <Button variant="secondary" label="Edit" onClick={() => { setEditExp(exp); setEditStatus(exp.status); setEditOpen(true); }} />
             <Button variant="transparent" ico={<SvgIcon name="trash-2" />}
               disabled={deletingId === exp.id} onClick={() => void handleDelete(exp.id)} />
@@ -240,6 +313,7 @@ export default function Experiments() {
       </div>
 
       {error && <p className="mb-3 text-xs" style={{ color: "var(--cl-red)" }}>{error}</p>}
+      {trainError && <p className="mb-3 text-xs" style={{ color: "var(--cl-red)" }}>{trainError}</p>}
 
       <Table columns={columns} data={filtered as unknown as Record<string, unknown>[]} />
 
@@ -270,6 +344,12 @@ export default function Experiments() {
               <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>Batch Size</label>
               <SelectList options={batchOptions} value={expBatch} onChange={setExpBatch} className="w-full" />
             </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>Epochs</label>
+              <SelectList options={epochOptions} value={expEpochs} onChange={setExpEpochs} className="w-full" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>Loss Function</label>
               <SelectList options={lossOptions} value={expLoss} onChange={setExpLoss} className="w-full" />

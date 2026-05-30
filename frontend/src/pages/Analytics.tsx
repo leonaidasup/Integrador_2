@@ -19,11 +19,12 @@ function authHeaders() {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface EpochData   { epoch: number; dice?: number; f1?: number; iou?: number; precision?: number; recall?: number; loss?: number; }
-interface TrainingRun { id: string; date: string; batch: number; iou: number; dice: number; recall: number; f1: number; loss: number; duration: string; status: string; epochs?: EpochData[]; confusion?: number[][]; label_dist?: { name: string; value: number }[]; }
+interface TrainingRun { id: string; date: string; batch: number; iou: number; dice: number; recall: number; f1: number; loss: number; duration: string; status: string; loss_function?: string; class_names?: string[]; epochs?: EpochData[]; confusion?: number[][]; label_dist?: { name: string; value: number }[]; dataset_class_distribution?: { name: string; value: number }[]; }
 interface Experiment  { id: string; name: string; model_id: string; dataset_id: string; status: string; results?: { trainings?: TrainingRun[] } | null; created_at: string; updated_at: string; }
+interface RegistryModel { id: string; classes?: string[]; }
 
 // ── Constants ─────────────────────────────────────────────────────────────
-const PIE_COLORS = ["#0f92f7", "#a855f7"];
+const PIE_COLORS = ["#0f92f7", "#a855f7", "#00c896", "#f43f5e", "#ce9200", "#14b8a6"];
 const METRIC_COLORS: Record<string, string> = { dice: "#00c896", f1: "#0f92f7", iou: "#ce9200", precision: "#a855f7", recall: "#f43f5e" };
 const METRICS = ["dice", "f1", "iou", "precision", "recall"];
 const statusStyles: Record<string, { bg: string; color: string }> = {
@@ -42,6 +43,23 @@ function calcStats(data: EpochData[], key: string) {
   const mean = values.reduce((a, b) => a + b, 0) / (values.length || 1);
   const std  = Math.sqrt(values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (values.length || 1));
   return { mean, std };
+}
+
+function normalizeClassLabels(matrix: number[][], labels: string[]) {
+  const size = Math.max(matrix.length, ...matrix.map(row => row.length), labels.length, 1);
+  return Array.from({ length: size }, (_, index) => labels[index] ?? `Class ${index + 1}`);
+}
+
+function modelClassLabels(model?: RegistryModel) {
+  return (model?.classes ?? [])
+    .map(item => String(item).trim())
+    .filter(item => item && item.toLowerCase() !== "background");
+}
+
+function matrixWithSize(matrix: number[][], size: number) {
+  return Array.from({ length: size }, (_, rowIndex) =>
+    Array.from({ length: size }, (_, colIndex) => matrix[rowIndex]?.[colIndex] ?? 0),
+  );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -77,24 +95,40 @@ function MetricDetailChart({ data, metric }: { data: EpochData[]; metric: string
   );
 }
 
-function ConfusionMatrix({ matrix }: { matrix: number[][] }) {
-  const labels = ["Positive", "Negative"];
+function ConfusionMatrix({ matrix, labels }: { matrix: number[][]; labels: string[] }) {
   const max = Math.max(...matrix.flat(), 1);
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-row gap-1 ml-20">
-        {labels.map(l => <div key={l} className="flex-1 text-center text-xs font-semibold" style={{ color: "var(--cl-font-secondary)" }}>{l}</div>)}
+      <div className="flex items-center gap-2">
+        <div className="w-24 text-xs font-bold text-right pr-2" style={{ color: "var(--cl-font-secondary)" }}>Real \\ Predicted</div>
+        <div className="flex flex-1 gap-1">
+          {labels.map(l => (
+            <div key={l} className="flex-1 min-w-20 text-center text-xs font-semibold truncate px-1"
+              title={l}
+              style={{ color: "var(--cl-font-secondary)" }}>
+              {l}
+            </div>
+          ))}
+        </div>
       </div>
       {matrix.map((row, i) => (
         <div key={i} className="flex flex-row items-center gap-1">
-          <div className="w-20 text-xs font-semibold text-right pr-2" style={{ color: "var(--cl-font-secondary)" }}>{labels[i]}</div>
+          <div className="w-24 text-xs font-semibold text-right pr-2 truncate"
+            title={labels[i] ?? `Class ${i + 1}`}
+            style={{ color: "var(--cl-font-secondary)" }}>
+            {labels[i] ?? `Class ${i + 1}`}
+          </div>
           {row.map((val, j) => {
             const intensity = val / max;
             const isCorrect = i === j;
             return (
-              <div key={j} className="flex-1 h-20 flex flex-col items-center justify-center rounded-lg gap-1"
+              <div key={j} className="flex-1 min-w-20 h-20 flex flex-col items-center justify-center rounded-lg gap-1"
+                title={`${labels[i] ?? `Class ${i + 1}`} predicted as ${labels[j] ?? `Class ${j + 1}`}: ${val}`}
                 style={{ background: isCorrect ? `rgba(15,146,247,${0.2 + intensity * 0.6})` : "rgba(15,146,247,0.05)", border: isCorrect ? "1px solid var(--cl-blue)" : "1px solid var(--cl-border)" }}>
                 <span className="text-lg font-bold" style={{ color: "var(--cl-font-primary)" }}>{val}</span>
+                <span className="text-[10px] max-w-full px-1 truncate" style={{ color: "var(--cl-font-secondary)" }}>
+                  {labels[j] ?? `Class ${j + 1}`}
+                </span>
                 <span className="text-xs" style={{ color: "var(--cl-font-secondary)" }}>
                   {((val / (row.reduce((a, b) => a + b, 0) || 1)) * 100).toFixed(1)}%
                 </span>
@@ -107,15 +141,65 @@ function ConfusionMatrix({ matrix }: { matrix: number[][] }) {
   );
 }
 
+function ConfusionSummary({ matrix, labels }: { matrix: number[][]; labels: string[] }) {
+  const total = matrix.flat().reduce((acc, value) => acc + value, 0);
+  const correct = matrix.reduce((acc, row, index) => acc + (row[index] ?? 0), 0);
+  const accuracy = total > 0 ? correct / total : 0;
+  const classRows = labels.map((label, index) => {
+    const support = matrix[index]?.reduce((acc, value) => acc + value, 0) ?? 0;
+    const predicted = matrix.reduce((acc, row) => acc + (row[index] ?? 0), 0);
+    const truePositive = matrix[index]?.[index] ?? 0;
+    return {
+      label,
+      support,
+      precision: predicted > 0 ? truePositive / predicted : 0,
+      recall: support > 0 ? truePositive / support : 0,
+    };
+  });
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-2 text-center">
+        {[
+          ["Accuracy", accuracy],
+          ["Samples", total],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="rounded-md border px-2 py-2"
+            style={{ borderColor: "var(--cl-border)" }}>
+            <p className="text-xs" style={{ color: "var(--cl-font-secondary)" }}>{String(label)}</p>
+            <p className="text-sm font-bold" style={{ color: "var(--cl-blue)" }}>
+              {String(label) === "Accuracy" ? `${((value as number) * 100).toFixed(1)}%` : String(value)}
+            </p>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-col gap-2">
+        {classRows.map(row => (
+          <div key={row.label} className="grid grid-cols-4 gap-2 items-center rounded-md border px-3 py-2 text-xs"
+            style={{ borderColor: "var(--cl-border)", background: "var(--bg-tables-selector)" }}>
+            <span className="font-bold truncate" style={{ color: "var(--cl-font-primary)" }}>{row.label}</span>
+            <span style={{ color: "var(--cl-font-secondary)" }}>Samples {row.support}</span>
+            <span style={{ color: "var(--cl-font-secondary)" }}>P {(row.precision * 100).toFixed(1)}%</span>
+            <span style={{ color: "var(--cl-font-secondary)" }}>R {(row.recall * 100).toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LabelPieChart({ data }: { data: { name: string; value: number }[] }) {
   const total = data.reduce((a, b) => a + b.value, 0);
   return (
     <div className="flex flex-col items-center justify-center h-full">
-      <p className="text-xs font-semibold mb-2" style={{ color: "var(--cl-font-secondary)" }}>Label Distribution</p>
+      <p className="text-xs font-semibold mb-2" style={{ color: "var(--cl-font-secondary)" }}>Dataset Class Distribution</p>
       <div className="relative">
-        <ResponsiveContainer width={160} height={160}>
+        <ResponsiveContainer width={220} height={190}>
           <PieChart>
-            <Pie data={data} cx="50%" cy="50%" innerRadius={50} outerRadius={75} dataKey="value" strokeWidth={0}>
+            <Pie data={data} cx="50%" cy="50%" innerRadius={44} outerRadius={68} dataKey="value" strokeWidth={0}
+              label={({ name, percent }) => `${String(name)} ${((percent ?? 0) * 100).toFixed(1)}%`}
+              labelLine
+              fontSize={11}>
               {data.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
             </Pie>
             <PieTooltip contentStyle={{ background: "var(--bg-frame)", border: "1px solid var(--cl-border)", borderRadius: 8, fontSize: 12 }}
@@ -142,9 +226,37 @@ function LabelPieChart({ data }: { data: { name: string; value: number }[] }) {
   );
 }
 
+function LabelDistributionSummary({ data }: { data: { name: string; value: number }[] }) {
+  const total = data.reduce((a, b) => a + b.value, 0);
+  return (
+    <div className="flex flex-col gap-2">
+      {data.map((item, index) => {
+        const percent = total > 0 ? (item.value / total) * 100 : 0;
+        return (
+          <div key={item.name} className="flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: PIE_COLORS[index % PIE_COLORS.length] }} />
+              <span className="font-semibold truncate" style={{ color: "var(--cl-font-primary)" }}>{item.name}</span>
+            </div>
+            <span className="font-bold" style={{ color: "var(--cl-font-secondary)" }}>
+              {item.value} / {percent.toFixed(1)}%
+            </span>
+          </div>
+        );
+      })}
+      <div className="flex items-center justify-between border-t pt-2 mt-1 text-xs"
+        style={{ borderColor: "var(--cl-border)", color: "var(--cl-font-secondary)" }}>
+        <span>Total samples</span>
+        <span className="font-bold">{total}</span>
+      </div>
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────
 export default function Analytics() {
   const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [models, setModels] = useState<RegistryModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedExp, setSelectedExp] = useState<Experiment | null>(null);
   const [selectedTrainingId, setSelectedTrainingId] = useState<string | null>(null);
@@ -157,10 +269,13 @@ export default function Analytics() {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE_URL}/experiments`, { headers: authHeaders() });
+      const modelRes = await fetch(`${API_BASE_URL}/registry/models`, { headers: authHeaders() });
       const data = await res.json();
+      const modelData = await modelRes.json();
       if (res.ok) {
         const exps: Experiment[] = data.experiments ?? [];
         setExperiments(exps);
+        if (modelRes.ok) setModels(modelData.models ?? []);
         if (!selectedExp && exps.length > 0) {
           const latest = exps.reduce((a, b) => a.updated_at > b.updated_at ? a : b);
           setSelectedExp(latest);
@@ -187,8 +302,17 @@ export default function Analytics() {
   const trainings: TrainingRun[] = selectedExp?.results?.trainings ?? [];
   const activeTraining = trainings.find(t => t.id === selectedTrainingId) ?? trainings[0] ?? null;
   const epochData: EpochData[] = activeTraining?.epochs ?? [];
-  const confMatrix = activeTraining?.confusion ?? [[0, 0], [0, 0]];
-  const labelDist  = activeTraining?.label_dist ?? [];
+  const selectedModel = models.find(model => model.id === selectedExp?.model_id);
+  const labelSource =
+    activeTraining?.class_names?.filter(Boolean) ??
+    modelClassLabels(selectedModel);
+  const distributionSource = activeTraining?.dataset_class_distribution ?? activeTraining?.label_dist ?? [];
+  const classLabels = normalizeClassLabels(
+    activeTraining?.confusion ?? [],
+    labelSource.length > 0 ? labelSource : distributionSource.map(item => item.name),
+  );
+  const confMatrix = matrixWithSize(activeTraining?.confusion ?? [], classLabels.length);
+  const labelDist  = activeTraining?.dataset_class_distribution ?? activeTraining?.label_dist ?? [];
 
   const filtered = experiments.filter(e => e.name.toLowerCase().includes(query.toLowerCase()));
 
@@ -287,11 +411,25 @@ export default function Analytics() {
                 )}
             </Card>
 
-            <Card title="Confusion Matrix">
-              <div className="flex flex-row gap-4 items-center">
-                <div className="flex-1"><ConfusionMatrix matrix={confMatrix} /></div>
-                <div className="w-44 border-l pl-4" style={{ borderColor: "var(--cl-border)" }}>
+            <Card title="Class Confusion & Dataset Distribution">
+              {activeTraining && (
+                <p className="text-xs mb-3 font-semibold" style={{ color: "var(--cl-font-secondary)" }}>
+                  Loss: <span style={{ color: "var(--cl-blue)" }}>{activeTraining.loss_function ?? "configured"}</span>
+                  &nbsp; · &nbsp;Batch: <span style={{ color: "var(--cl-blue)" }}>{activeTraining.batch}</span>
+                  &nbsp; · &nbsp;Run: <span style={{ color: "var(--cl-blue)" }}>{activeTraining.id}</span>
+                </p>
+              )}
+              <div className="flex flex-row gap-4 items-start">
+                <div className="flex-1 flex flex-col gap-4">
+                  <div>
+                    <p className="text-xs font-semibold mb-2" style={{ color: "var(--cl-font-secondary)" }}>Rows are real classes. Columns are predicted classes.</p>
+                    <ConfusionMatrix matrix={confMatrix} labels={classLabels} />
+                  </div>
+                  <ConfusionSummary matrix={confMatrix} labels={classLabels} />
+                </div>
+                <div className="w-72 border-l pl-4 flex flex-col gap-4" style={{ borderColor: "var(--cl-border)" }}>
                   <LabelPieChart data={labelDist} />
+                  <LabelDistributionSummary data={labelDist} />
                 </div>
               </div>
             </Card>

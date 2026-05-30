@@ -132,3 +132,53 @@ RETURNS void AS $$
   WHERE id = ds_id;
 $$ LANGUAGE sql;
 
+CREATE TABLE IF NOT EXISTS public.experiments (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT        NOT NULL,
+    model_id    UUID        NOT NULL REFERENCES public.models(id)   ON DELETE CASCADE,
+    dataset_id  UUID        NOT NULL REFERENCES public.datasets(id) ON DELETE CASCADE,
+    description TEXT,
+    config      JSONB       DEFAULT '{}',
+    status      TEXT        NOT NULL DEFAULT 'pending'
+                                CHECK (status IN ('pending','running','completed','failed','paused')),
+    results     JSONB,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiments_model_id
+ON public.experiments(model_id);
+
+CREATE INDEX IF NOT EXISTS idx_experiments_dataset_id
+ON public.experiments(dataset_id);
+
+ALTER TABLE public.experiments ADD COLUMN IF NOT EXISTS error TEXT;
+
+ALTER TABLE public.experiments
+ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ,
+ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE segmentations ALTER COLUMN model_id DROP NOT NULL;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS architecture TEXT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS encoder TEXT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS best_accuracy FLOAT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS best_loss FLOAT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS best_iou FLOAT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS final_loss FLOAT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS final_iou FLOAT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS final_accuracy FLOAT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS epochs_planned INTEGER;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS epochs_completed INTEGER;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS total_duration_seconds FLOAT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS epoch_history JSONB;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS hyperparameters JSONB;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS user_id TEXT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS dataset_id TEXT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS model_id TEXT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS status TEXT;
+ALTER TABLE experiments ADD COLUMN IF NOT EXISTS error TEXT;
+ALTER TABLE experiments DROP CONSTRAINT experiments_status_check;
+ALTER TABLE experiments ADD CONSTRAINT experiments_status_check 
+CHECK (status = ANY (ARRAY['pending', 'queued', 'running', 'completed', 'failed', 'paused', 'cancelled']));

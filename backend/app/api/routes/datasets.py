@@ -242,16 +242,18 @@ async def import_coco_dataset(
     current_user: UserResponse = Depends(get_current_user),
 ) -> DatasetResponse:
     """Import a COCO dataset from a ZIP containing train/test/valid splits with annotations."""
-    
+
     if file.content_type != "application/zip" and not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="File must be a ZIP archive.")
-    
+
     zip_data = await file.read()
     if not zip_data:
         raise HTTPException(status_code=400, detail="Empty ZIP file.")
-    
+
     try:
-        # Create dataset first
+        from pycocotools.coco import COCO
+
+        # Crear dataset
         now = _now()
         dataset_data = {
             "user_id": current_user.id,
@@ -267,36 +269,66 @@ async def import_coco_dataset(
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to create dataset.")
         dataset = DatasetResponse(**res.data[0])
-        
-        # Process ZIP
+
         image_count = 0
+
         with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-            # Expected structure: train/, test/, valid/ (each with images and .coco annotations)
+            all_files = zf.namelist()
             splits = ["train", "test", "valid"]
-            
+
             for split in splits:
-                split_files = [f for f in zf.namelist() if f.startswith(f"{split}/")]
-                
-                for file_path in split_files:
-                    # Skip directories and non-image files
-                    if file_path.endswith("/") or file_path.endswith(".coco"):
-                        continue
-                    
-                    # Check if it's an image
-                    ext = Path(file_path).suffix.lower()
-                    if ext not in {".png", ".jpg", ".jpeg", ".tiff"}:
-                        continue
-                    
+                # Buscar el JSON de anotaciones COCO para este split
+                # Soporta: _annotations.coco.json o cualquier .json en la carpeta
+                annotation_path = next(
+                    (
+                        f for f in all_files
+                        if f.startswith(f"{split}/") and f.endswith(".json")
+                    ),
+                    None,
+                )
+
+                # Cargar anotaciones COCO si existen
+                coco_by_filename: dict = {}
+                coco_obj = None
+                if annotation_path:
                     try:
-                        # Extract image data
+                        ann_data = json.loads(zf.read(annotation_path).decode("utf-8"))
+
+                        # Escribir a archivo temporal para pycocotools
+                        import tempfile, os
+                        with tempfile.NamedTemporaryFile(
+                            delete=False, suffix=".json", mode="w"
+                        ) as tmp:
+                            json.dump(ann_data, tmp)
+                            tmp_path = tmp.name
+
+                        coco_obj = COCO(tmp_path)
+                        os.unlink(tmp_path)
+
+                        # Indexar por filename
+                        for coco_img in coco_obj.loadImgs(coco_obj.getImgIds()):
+                            coco_by_filename[coco_img["file_name"]] = coco_img
+                    except Exception:
+                        coco_obj = None
+
+                # Procesar imágenes del split
+                split_image_files = [
+                    f for f in all_files
+                    if f.startswith(f"{split}/")
+                    and not f.endswith("/")
+                    and Path(f).suffix.lower() in {".png", ".jpg", ".jpeg", ".tiff"}
+                ]
+
+                for file_path in split_image_files:
+                    try:
                         file_data = zf.read(file_path)
                         img = PILImage.open(io.BytesIO(file_data)).convert("RGB")
                         width, height = img.size
+                        ext = Path(file_path).suffix.lower()
                         fmt = ext.lstrip(".")
-                        
-                        # Upload image
-                        image_id = str(uuid.uuid4())
                         filename = Path(file_path).name
+
+                        image_id = str(uuid.uuid4())
                         storage_path = storage.upload_image(
                             data=file_data,
                             filename=filename,
@@ -304,8 +336,7 @@ async def import_coco_dataset(
                             dataset_id=dataset.id,
                             image_id=image_id,
                         )
-                        
-                        # Save image record with split metadata
+
                         image_record = {
                             "id": image_id,
                             "dataset_id": dataset.id,
@@ -317,20 +348,65 @@ async def import_coco_dataset(
                             "format": fmt,
                             "size_bytes": len(file_data),
                             "created_at": _now(),
+                            "split": split,
                         }
                         _db().table("images").insert(image_record).execute()
                         image_count += 1
-                    except Exception as e:
-                        # Log but continue with other images
-                        pass
-        
-        # Update dataset image count
+
+                        # ── Generar máscara desde anotaciones COCO ──────────
+                        print(f"[COCO] coco_obj={coco_obj is not None}, filename={filename}, in_index={filename in coco_by_filename}")
+
+                        if coco_obj and filename in coco_by_filename:
+                            try:
+                                coco_img = coco_by_filename[filename]
+                                ann_ids = coco_obj.getAnnIds(imgIds=coco_img["id"])
+                                anns = coco_obj.loadAnns(ann_ids)
+                                print(f"[COCO] {filename} → {len(anns)} anotaciones")
+
+                                if anns:
+                                    mask = np.zeros((height, width), dtype=np.uint8)
+                                    for ann in anns:
+                                        class_id = ann["category_id"]
+                                        rle_mask = coco_obj.annToMask(ann)
+                                        mask[rle_mask > 0] = class_id
+
+                                    seg_id = str(uuid.uuid4())
+                                    mask_path = storage.upload_mask(
+                                        mask,
+                                        user_id=current_user.id,
+                                        segmentation_id=seg_id,
+                                    )
+                                    print(f"[COCO] Máscara subida: {mask_path}")
+
+                                    unique_ids = [int(i) for i in np.unique(mask) if i > 0]
+                                    cats = coco_obj.loadCats(unique_ids) if unique_ids else []
+                                    classes_found = [c["name"] for c in cats]
+
+                                    seg_record = {
+                                        "id": seg_id,
+                                        "image_id": image_id,
+                                        "user_id": current_user.id,
+                                        "mask_path": mask_path,
+                                        "classes_found": classes_found,
+                                        "created_at": _now(),
+                                    }
+                                    result = _db().table("segmentations").insert(seg_record).execute()
+                                    print(f"[COCO] Segmentación guardada: {result.data}")
+
+                            except Exception as e:
+                                print(f"[COCO] ERROR en {filename}: {e}")
+                                import traceback
+                                traceback.print_exc()
+
+                    except Exception:
+                        continue
+
         if image_count > 0:
             _db().table("datasets").update({"image_count": image_count}).eq("id", dataset.id).execute()
             dataset.image_count = image_count
-        
+
         return dataset
-        
+
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file.")
     except Exception as e:
