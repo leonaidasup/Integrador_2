@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "../components/Card";
 import { SummaryCard } from "../components/SummaryCard";
 import { Table } from "../components/Table";
@@ -8,68 +8,10 @@ import { SvgIcon } from "../components/SvgIcon";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 
-const users = [
-  {
-    id: 1,
-    user: "John Doe",
-    username: "john",
-    role: "user",
-    experiments: 12,
-    status: "active",
-    lastLogin: "Mar 14, 14:02",
-  },
-  {
-    id: 2,
-    user: "Ana García",
-    username: "ana",
-    role: "user",
-    experiments: 8,
-    status: "active",
-    lastLogin: "Mar 14, 13:21",
-  },
-  {
-    id: 3,
-    user: "Luis Pérez",
-    username: "luis",
-    role: "user",
-    experiments: 3,
-    status: "blocked",
-    lastLogin: "Mar 12, 09:10",
-  },
-  {
-    id: 4,
-    user: "María López",
-    username: "maria",
-    role: "admin",
-    experiments: 0,
-    status: "active",
-    lastLogin: "Mar 14, 08:45",
-  },
-  {
-    id: 5,
-    user: "Carlos Ruiz",
-    username: "carlo",
-    role: "user",
-    experiments: 21,
-    status: "active",
-    lastLogin: "Mar 13, 17:30",
-  },
-  {
-    id: 6,
-    user: "Sara Muñoz",
-    username: "sara",
-    role: "user",
-    experiments: 5,
-    status: "blocked",
-    lastLogin: "Mar 10, 11:20",
-  },
+const initialUsers = [
 ];
 
-const summaryUsers = {
-  "Total Users": users.length,
-  "Active Users": users.filter((u) => u.status === "active").length,
-  Admins: users.filter((u) => u.role === "admin").length,
-};
+
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
   active: { bg: "var(--bg-green)", color: "var(--cl-green)" },
@@ -99,6 +41,63 @@ export default function UserTable() {
   const [editOpen, setEditOpen] = useState(false);
   const [viewOpen, setViewOpen] = useState(false); // ✅ NUEVO
   const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [userDetails, setUserDetails] = useState<any>(null);
+
+  // data + refresh control
+  const [users, setUsers] = useState(initialUsers);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const REFRESH_INTERVAL = 60 * 1000; // 60s
+
+  const refreshData = async () => {
+    try {
+      // Replace with your actual API endpoint
+      const response = await fetch("http://localhost:8000/users");
+      if (!response.ok) throw new Error("Failed to fetch users");
+      const data = await response.json();
+      
+      // Map database users to table format
+      const mappedUsers = data.map((user: any) => ({
+        id: user.id,
+        user: user.name,
+        username: user.email.split("@")[0],
+        role: user.role,
+        experiments: 0, // TODO: fetch from experiments table
+        status: "active", // TODO: determine from user status
+        lastLogin: new Date(user.created_at).toLocaleString(),
+      }));
+      
+      setUsers(mappedUsers);
+      setLastUpdated(new Date());
+    } catch (error) {
+      console.error("Error refreshing users:", error);
+      // Keep current data on error
+    }
+  };
+
+  const fetchUserDetails = async (userId: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/users/${userId}`);
+      if (!response.ok) throw new Error("Failed to fetch user details");
+      const data = await response.json();
+      setUserDetails(data);
+    } catch (error) {
+      console.error("Error fetching user details:", error);
+    }
+  };
+
+  useEffect(() => {
+    refreshData();
+    if (!autoRefresh) return;
+    const id = setInterval(refreshData, REFRESH_INTERVAL);
+    return () => clearInterval(id);
+  }, [autoRefresh]);
+
+  const summaryUsers = {
+    "Total Users": users.length,
+    "Active Users": users.filter((u) => u.status === "active").length,
+    Admins: users.filter((u) => u.role === "admin").length,
+  };
 
   const filteredUsers = users.filter((row) => {
     const q = search.toLowerCase();
@@ -172,6 +171,7 @@ export default function UserTable() {
             ico={<SvgIcon name="eye" size="w-4 h-4" />}
             onClick={() => {
               setSelectedUser(row);
+              fetchUserDetails(row.id);
               setViewOpen(true);
             }}
           />
@@ -197,13 +197,27 @@ export default function UserTable() {
 
   return (
     <main className="flex-1 overflow-y-auto p-6 bg-[var(--bg-page-user)]">
-      <div className="flex flex-col mb-6">
-        <h1 className="text-2xl text-[var(--cl-font-primary)] font-semibold">
-          User Table
-        </h1>
-        <p className="text-sm text-[var(--cl-font-secondary)]">
-          Manage platform users and permissions
-        </p>
+      <div className="flex flex-row items-center justify-between mb-6">
+        <div className="flex flex-col">
+          <h1 className="text-2xl text-[var(--cl-font-primary)] font-semibold">
+            User Table
+          </h1>
+          <p className="text-sm text-[var(--cl-font-secondary)]">
+            Manage platform users and permissions
+          </p>
+        </div>
+
+        <div className="flex flex-row items-center gap-2">
+          <Button label="Refresh" ico={<SvgIcon name="refresh" />} onClick={refreshData} />
+          <Button
+            label={autoRefresh ? "Auto: On" : "Auto: Off"}
+            variant="secondary"
+            onClick={() => setAutoRefresh(!autoRefresh)}
+          />
+          {lastUpdated && (
+            <span className="text-xs text-[var(--cl-font-secondary)]">Updated: {lastUpdated.toLocaleTimeString()}</span>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-4">
@@ -296,7 +310,7 @@ export default function UserTable() {
         </div>
       </Modal>
 
-      <Modal
+       <Modal
         open={viewOpen}
         onClose={() => setViewOpen(false)}
         title="User Info"
@@ -306,40 +320,26 @@ export default function UserTable() {
         <div className="flex flex-col gap-4">
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-[var(--cl-font-primary)]">
-              {selectedUser?.user}
+              {userDetails?.name || selectedUser?.user}
             </span>
             <span className="text-xs text-[var(--cl-font-secondary)]">
-              @{selectedUser?.username}
+              @{userDetails?.email?.split("@")[0] || selectedUser?.username}
             </span>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div className="p-3 rounded-lg bg-[var(--bg-tables-selector)]">
               <p className="text-xs text-[var(--cl-font-secondary)]">
-                CPU Usage
-              </p>
-              <p className="text-sm text-[var(--cl-font-primary)]">32%</p>
-            </div>
-
-            <div className="p-3 rounded-lg bg-[var(--bg-tables-selector)]">
-              <p className="text-xs text-[var(--cl-font-secondary)]">
-                GPU Usage
-              </p>
-              <p className="text-sm text-[var(--cl-font-primary)]">68%</p>
-            </div>
-
-            <div className="p-3 rounded-lg bg-[var(--bg-tables-selector)]">
-              <p className="text-xs text-[var(--cl-font-secondary)]">
                 Model Storage
               </p>
-              <p className="text-sm text-[var(--cl-font-primary)]">2.4 GB</p>
+              <p className="text-sm text-[var(--cl-font-primary)]">{(userDetails?.model_storage_gb || 0).toFixed(1)} GB</p>
             </div>
 
             <div className="p-3 rounded-lg bg-[var(--bg-tables-selector)]">
               <p className="text-xs text-[var(--cl-font-secondary)]">
                 Dataset Storage
               </p>
-              <p className="text-sm text-[var(--cl-font-primary)]">5.1 GB</p>
+              <p className="text-sm text-[var(--cl-font-primary)]">{(userDetails?.dataset_storage_gb || 0).toFixed(1)} GB</p>
             </div>
           </div>
 
@@ -349,14 +349,16 @@ export default function UserTable() {
             </p>
 
             <div className="flex flex-col gap-1 text-xs">
-              <div className="flex justify-between">
-                <span className="text-[var(--cl-font-primary)]">ResNet50</span>
-                <span className="text-[var(--cl-font-secondary)]">1.2 GB</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[var(--cl-font-primary)]">YOLOv8</span>
-                <span className="text-[var(--cl-font-secondary)]">800 MB</span>
-              </div>
+              {userDetails?.models && userDetails.models.length > 0 ? (
+                userDetails.models.map((model: any, idx: number) => (
+                  <div key={idx} className="flex justify-between">
+                    <span className="text-[var(--cl-font-primary)]">{model.name}</span>
+                    <span className="text-[var(--cl-font-secondary)]">{model.size_gb.toFixed(1)} GB</span>
+                  </div>
+                ))
+              ) : (
+                <span className="text-[var(--cl-font-secondary)]">No models</span>
+              )}
             </div>
           </div>
 
@@ -364,16 +366,16 @@ export default function UserTable() {
             <p className="text-xs text-[var(--cl-font-secondary)]">Datasets</p>
 
             <div className="flex flex-col gap-1 text-xs">
-              <div className="flex justify-between">
-                <span className="text-[var(--cl-font-primary)]">Images v1</span>
-                <span className="text-[var(--cl-font-secondary)]">3.2 GB</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[var(--cl-font-primary)]">
-                  Medical Set
-                </span>
-                <span className="text-[var(--cl-font-secondary)]">1.9 GB</span>
-              </div>
+              {userDetails?.datasets && userDetails.datasets.length > 0 ? (
+                userDetails.datasets.map((dataset: any, idx: number) => (
+                  <div key={idx} className="flex justify-between">
+                    <span className="text-[var(--cl-font-primary)]">{dataset.name}</span>
+                    <span className="text-[var(--cl-font-secondary)]">{dataset.size_gb.toFixed(1)} GB</span>
+                  </div>
+                ))
+              ) : (
+                <span className="text-[var(--cl-font-secondary)]">No datasets</span>
+              )}
             </div>
           </div>
 
@@ -389,27 +391,21 @@ export default function UserTable() {
                 <span>Status</span>
               </div>
 
-              <div className="grid grid-cols-3 px-3 py-2">
-                <span className="text-[var(--cl-font-primary)]">Run Model</span>
-                <span className="text-[var(--cl-font-secondary)]">Mar 14</span>
-                <span className="text-[var(--cl-green)]">Success</span>
-              </div>
-
-              <div className="grid grid-cols-3 px-3 py-2">
-                <span className="text-[var(--cl-font-primary)]">
-                  Upload Dataset
-                </span>
-                <span className="text-[var(--cl-font-secondary)]">Mar 13</span>
-                <span className="text-[var(--cl-green)]">Success</span>
-              </div>
-
-              <div className="grid grid-cols-3 px-3 py-2">
-                <span className="text-[var(--cl-font-primary)]">
-                  Train Model
-                </span>
-                <span className="text-[var(--cl-font-secondary)]">Mar 12</span>
-                <span className="text-[var(--cl-yellow)]">Pending</span>
-              </div>
+              {userDetails?.recent_activity && userDetails.recent_activity.length > 0 ? (
+                userDetails.recent_activity.map((activity: any, idx: number) => (
+                  <div key={idx} className="grid grid-cols-3 px-3 py-2">
+                    <span className="text-[var(--cl-font-primary)]">{activity.action}</span>
+                    <span className="text-[var(--cl-font-secondary)]">{activity.date}</span>
+                    <span className={activity.status === "Success" ? "text-[var(--cl-green)]" : "text-[var(--cl-yellow)]"}>
+                      {activity.status}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="grid grid-cols-3 px-3 py-2">
+                  <span colSpan={3} className="text-[var(--cl-font-secondary)]">No activity</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

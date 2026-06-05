@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, health, model, registry, datasets, experiments
+from app.api.routes import auth, health, model, registry, datasets, experiments, users, system, user
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,9 @@ def create_app() -> FastAPI:
     app.include_router(registry.router)
     app.include_router(datasets.router)
     app.include_router(experiments.router)
+    app.include_router(users.router)
+    app.include_router(system.router)
+    app.include_router(user.router)
 
     @app.on_event("startup")
     def _load_active_model_on_startup() -> None:

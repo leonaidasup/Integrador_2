@@ -10,6 +10,7 @@ interface HeaderProps {
   userName?: string;
   children?: React.ReactNode;
   onLogout?: () => void;
+  onProfileUpdate?: (name: string) => void; 
 }
 
 // ─── estilos compartidos ───────────────────────────────────────────────────
@@ -118,7 +119,7 @@ const SelectRow: React.FC<SelectRowProps> = ({
 
 // ─── componente principal ──────────────────────────────────────────────────
 
-export const Header: React.FC<HeaderProps> = ({ children, onLogout, userName }) => {
+export const Header: React.FC<HeaderProps> = ({ children, onLogout, userName, onProfileUpdate }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
@@ -152,6 +153,45 @@ export const Header: React.FC<HeaderProps> = ({ children, onLogout, userName }) 
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Load profile from API on mount
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        // Get user_id from localStorage
+        let userId = localStorage.getItem("user_id");
+        
+        // If no userId, fetch first user to test
+        if (!userId) {
+          const usersRes = await fetch("http://localhost:8000/users");
+          if (usersRes.ok) {
+            const users = await usersRes.json();
+            if (users.length > 0) {
+              userId = users[0].id;
+              localStorage.setItem("user_id", userId);
+            }
+          }
+        }
+
+        if (!userId) return;
+
+        const res = await fetch("http://localhost:8000/user/profile", {
+          headers: { "x-user-id": userId },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setProfile({
+          name: data.name ?? userName ?? "",
+          email: data.email ?? "",
+          role: data.role ?? "",
+          bio: data.bio ?? "",
+        });
+      } catch (err) {
+        console.error("Failed to fetch profile", err);
+      }
+    };
+    fetchProfile();
+  }, [userName]);
+
   const handleProfileChange = (field: keyof ProfileForm, value: string) =>
     setProfile((prev) => ({ ...prev, [field]: value }));
 
@@ -160,14 +200,71 @@ export const Header: React.FC<HeaderProps> = ({ children, onLogout, userName }) 
     value: SettingsState[K]
   ) => setSettings((prev) => ({ ...prev, [key]: value }));
 
-  const handleSaveProfile = () => {
-    console.log("Saving profile:", profile);
-    setProfileModalOpen(false);
+  const handleSaveProfile = async () => {
+    try {
+      // Get user_id from localStorage or use a test ID
+      let userId = localStorage.getItem("user_id");
+      
+      // If no userId, fetch the first user from the database to test
+      if (!userId) {
+        const usersRes = await fetch("http://localhost:8000/users");
+        if (usersRes.ok) {
+          const users = await usersRes.json();
+          if (users.length > 0) {
+            userId = users[0].id;
+            localStorage.setItem("user_id", userId);
+          }
+        }
+      }
+
+      if (!userId) {
+        console.error("No user ID available");
+        return;
+      }
+
+      const res = await fetch("http://localhost:8000/user/profile", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-id": userId,
+        },
+        body: JSON.stringify(profile),
+      });
+      if (!res.ok) {
+        console.error("Failed to save profile", await res.text());
+        return;
+      }
+      const updated = await res.json();
+      // Update the display name and profile in header
+      setProfile({
+        name: updated.name ?? profile.name,
+        email: updated.email ?? profile.email,
+        role: updated.role ?? profile.role,
+        bio: updated.bio ?? profile.bio,
+      });
+      onProfileUpdate?.(updated.name ?? profile.name);
+      setProfileModalOpen(false);
+    } catch (err) {
+      console.error("Error saving profile", err);
+    }
   };
 
-  const handleSaveSettings = () => {
-    console.log("Saving settings:", settings);
-    setSettingsModalOpen(false);
+  const handleSaveSettings = async () => {
+    try {
+      const res = await fetch("/api/user/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(settings),
+      });
+      if (!res.ok) {
+        console.error("Failed to save settings", await res.text());
+        return;
+      }
+      setSettingsModalOpen(false);
+    } catch (err) {
+      console.error("Error saving settings", err);
+    }
   };
 
   const menuItems = [
@@ -243,9 +340,14 @@ export const Header: React.FC<HeaderProps> = ({ children, onLogout, userName }) 
                     marginBottom: "4px",
                   }}
                 >
-                  <p className="text-sm font-semibold" style={{ color: "var(--cl-font-primary)" }}>
-                    {userName}
+                  <p className="text-xs" style={{ color: "var(--cl-font-secondary)" }}>
+                    {profile.name || userName}
                   </p>
+                  {profile.email && (
+                    <p className="text-xs" style={{ color: "var(--cl-font-secondary)" }}>
+                      {profile.email}
+                    </p>
+                  )}
                 </div>
               )}
               {menuItems.map((item) => (

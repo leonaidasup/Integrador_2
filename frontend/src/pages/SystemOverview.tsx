@@ -1,96 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "../components/Card";
 import { Table } from "../components/Table";
 import { SvgIcon } from "../components/SvgIcon";
 import { InputText } from "../components/InputText";
 import { SelectList } from "../components/SelectList";
+import { Button } from "../components/Button";
 
-const activityLog = [
-  {
-    timestamp: "Mar 14, 14:02",
-    event: "Model Training",
-    type: "Training",
-    user: "john@app.com",
-    description: "Started ResNet training on CIFAR",
-    status: "Running",
-  },
-  {
-    timestamp: "Mar 14, 13:45",
-    event: "GPU Overflow",
-    type: "Error",
-    user: "system",
-    description: "GPU memory overflow on node-02",
-    status: "Failed",
-  },
-  {
-    timestamp: "Mar 14, 13:21",
-    event: "Dataset Upload",
-    type: "Storage",
-    user: "ana@app.com",
-    description: "Uploaded Cell Microscopy v2 (4.2 GB)",
-    status: "Done",
-  },
-  {
-    timestamp: "Mar 14, 12:40",
-    event: "Inference Timeout",
-    type: "Error",
-    user: "system",
-    description: "Request timeout after 30s on model v3",
-    status: "Failed",
-  },
-  {
-    timestamp: "Mar 14, 12:10",
-    event: "User Login",
-    type: "Auth",
-    user: "luis@app.com",
-    description: "Successful login from 192.168.1.42",
-    status: "Done",
-  },
-  {
-    timestamp: "Mar 14, 11:42",
-    event: "DB Pool Error",
-    type: "Error",
-    user: "system",
-    description: "Connection pool exhausted (limit: 20)",
-    status: "Failed",
-  },
-  {
-    timestamp: "Mar 14, 11:05",
-    event: "Model Deployed",
-    type: "Deploy",
-    user: "ana@app.com",
-    description: "CellSegNet v2.3 deployed to production",
-    status: "Done",
-  },
-  {
-    timestamp: "Mar 14, 10:30",
-    event: "Experiment Done",
-    type: "Training",
-    user: "john@app.com",
-    description: "VGG experiment completed — F1: 0.87",
-    status: "Done",
-  },
+const initialActivityLog = [
 ];
 
-const errors = [
-  {
-    label: "GPU Memory Overflow",
-    count: 7,
-    last: "Mar 14, 13:45",
-    icon: "cpu",
-  },
-  {
-    label: "Inference Timeout",
-    count: 1,
-    last: "Mar 14, 12:40",
-    icon: "pause",
-  },
-  {
-    label: "DB Connection Pool",
-    count: 3,
-    last: "Mar 14, 11:42",
-    icon: "database",
-  },
+const initialErrors = [
 ];
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
@@ -136,7 +55,7 @@ const columns = [
       );
     },
   },
-  { key: "user", label: "User", render: textRender },
+  { key: "user", label: "Address", render: textRender },
   { key: "description", label: "Description", render: textRender },
   {
     key: "status",
@@ -212,6 +131,46 @@ export default function SystemOverview() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
 
+  // data + refresh
+  const [activityLog, setActivityLog] = useState(initialActivityLog);
+  const [errors, setErrors] = useState(initialErrors);
+  const [metrics, setMetrics] = useState({
+    cpu_usage: 0,
+    ram_gb: 0,
+    ram_max_gb: 0,
+    gpu_usage: 0,
+    datasets_gb: 0,
+    models_gb: 0,
+  });
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const REFRESH_INTERVAL = 60 * 1000; // 60s
+
+  const refreshData = async () => {
+    try {
+      const response = await fetch("http://localhost:8000/system/overview");
+      if (response.ok) {
+        const data = await response.json();
+        setMetrics(data.metrics || metrics);
+        setActivityLog(data.activity_log || initialActivityLog);
+        setErrors(data.errors || initialErrors);
+        setLastUpdated(new Date());
+      }
+    } catch (error) {
+      console.error("Failed to fetch system overview:", error);
+      setActivityLog([...initialActivityLog]);
+      setErrors([...initialErrors]);
+      setLastUpdated(new Date());
+    }
+  };
+
+  useEffect(() => {
+    refreshData();
+    if (!autoRefresh) return;
+    const id = setInterval(refreshData, REFRESH_INTERVAL);
+    return () => clearInterval(id);
+  }, [autoRefresh]);
+
   const filterOptions = [
     { label: "All", value: "all" },
     { label: "Training", value: "training" },
@@ -236,39 +195,53 @@ export default function SystemOverview() {
   return (
     <main className="flex-1 overflow-y-auto p-6 bg-[var(--bg-page-user)]">
       {/* header */}
-      <div className="flex flex-col mb-6">
-        <h1 className="text-2xl text-[var(--cl-font-primary)] font-semibold">
-          System Overview
-        </h1>
-        <p className="text-sm text-[var(--cl-font-secondary)]">
-          Monitor infrastructure and platform activity
-        </p>
+      <div className="flex flex-row items-center justify-between mb-6">
+        <div className="flex flex-col">
+          <h1 className="text-2xl text-[var(--cl-font-primary)] font-semibold">
+            System Overview
+          </h1>
+          <p className="text-sm text-[var(--cl-font-secondary)]">
+            Monitor infrastructure and platform activity
+          </p>
+        </div>
+
+        <div className="flex flex-row items-center gap-2">
+          <Button label="Refresh" ico={<SvgIcon name="refresh" />} onClick={refreshData} />
+          <Button
+            label={autoRefresh ? "Auto: On" : "Auto: Off"}
+            variant="secondary"
+            onClick={() => setAutoRefresh(!autoRefresh)}
+          />
+          {lastUpdated && (
+            <span className="text-xs text-[var(--cl-font-secondary)]">Updated: {lastUpdated.toLocaleTimeString()}</span>
+          )}
+        </div>
       </div>
 
       {/* resource cards */}
       <div className="grid grid-cols-2 gap-4 mb-4">
-        <Card title="CPU & GPU Usage">
+        <Card title="CPU & RAM Usage">
           <div className="flex flex-col gap-4">
             <Gauge
               label="CPU Usage"
-              value={62}
+              value={metrics.cpu_usage}
               max={100}
               unit="%"
               color="var(--cl-blue)"
             />
             <Gauge
-              label="GPU Memory"
-              value={10.4}
-              max={16}
-              unit="GB"
-              color="var(--cl-yellow)"
-            />
-            <Gauge
               label="RAM"
-              value={28}
-              max={64}
+              value={metrics.ram_gb}
+              max={metrics.ram_max_gb}
               unit="GB"
               color="var(--cl-green)"
+            />
+            <Gauge
+              label="GPU Usage"
+              value={metrics.gpu_usage}
+              max={100}
+              unit="%"
+              color="var(--cl-yellow)"
             />
           </div>
         </Card>
@@ -277,24 +250,17 @@ export default function SystemOverview() {
           <div className="flex flex-col gap-4">
             <Gauge
               label="Datasets"
-              value={842}
+              value={metrics.datasets_gb}
               max={2000}
               unit="GB"
               color="var(--cl-blue)"
             />
             <Gauge
               label="Models"
-              value={124}
+              value={metrics.models_gb}
               max={500}
               unit="GB"
               color="var(--cl-yellow)"
-            />
-            <Gauge
-              label="Logs & Cache"
-              value={18}
-              max={100}
-              unit="GB"
-              color="var(--cl-green)"
             />
           </div>
         </Card>
